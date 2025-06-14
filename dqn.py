@@ -4,8 +4,14 @@ import torch.optim as optim
 import numpy as np
 from collections import deque
 import random
+import logging
 
-
+# Initialize logger
+logging.basicConfig(
+    filename="training.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 class DQN(nn.Module):
     """Deep Q-Network model"""
@@ -80,6 +86,7 @@ class DQNAgent:
         
         minibatch = random.sample(self.memory, batch_size)
         states, actions, rewards, next_states, dones = zip(*minibatch)
+        logging.info("Replaying %s experiences from memory", batch_size)
         
         states = torch.stack(states)
         actions = torch.LongTensor(actions)
@@ -89,14 +96,17 @@ class DQNAgent:
         
         # Get current Q values
         current_q = self.model(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+        logging.info("Current Q values: %s", current_q)
         
         # Get target Q values
         with torch.no_grad():
             next_q = self.target_model(next_states).max(1)[0].detach()
             target_q = rewards + (self.gamma * next_q * (1 - dones))
+        logging.info("Target Q values: %s", target_q)
         
         # Compute loss
         loss = self.criterion(current_q, target_q)
+        logging.info("Loss before optimization: %s", loss.item())
         
         # Optimize the model
         self.optimizer.zero_grad()
@@ -106,11 +116,14 @@ class DQNAgent:
         # Decay epsilon
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
+        logging.info("Current epsilon value: %s", self.epsilon)
             
         # Sync target model periodically
         if random.random() < 0.01:
             self.sync_target_model()
+            logging.info("Target model synchronized")
             
+        logging.info("Loss after optimization: %s", loss.item())
         return loss.item()
 
     def save_model(self, filename):

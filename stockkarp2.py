@@ -6,6 +6,14 @@ import requests
 import json
 import re
 from dqn import *
+import logging
+
+# Initialize logger
+logging.basicConfig(
+    filename="training.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 with open("./config.json") as cfg:
     CONFIG = json.load(cfg)
@@ -364,19 +372,34 @@ class ShowdownConnection(object):
         if not battle:
             return
         
+        # Log the start of a new decision
+        logging.info("Starting decision for battle: %s", roomName)
+        logging.info("Current state: %s", reqObject)
+        
         # Store previous experience if available
         if battle.last_state is not None and battle.last_valid_actions is not None:
             reward = 0  # Small intermediate reward
             next_state = self._get_state_vector(reqObject)
             self.agent.remember(battle.last_state, battle.last_action, reward, next_state, False)
             self.agent.replay(self.batch_size)
+            
+            # Log the experience replay
+            logging.info("Replayed experience with reward: %s", reward)
+            logging.info("Next state: %s", next_state)
         
         # Get current state and valid actions
         state = self._get_state_vector(reqObject)
         valid_actions = self._get_valid_actions_mask(reqObject)
         
+        # Log the current state and valid actions
+        logging.info("Current state vector: %s", state)
+        logging.info("Valid actions: %s", valid_actions)
+        
         # Choose action
         action_idx = self.agent.act(state, valid_actions)
+        
+        # Log the chosen action
+        logging.info("Chosen action index: %s", action_idx)
         
         # Store for next step
         battle.last_state = state
@@ -398,7 +421,8 @@ class ShowdownConnection(object):
                 pokemon_index = available_switches[0] + 1
                 command = f"switch {pokemon_index}"
         
-        print(f"Executing: {command}")
+        # Log the command being sent
+        logging.info("Executing command: %s", command)
         self.sendCommand(command, room_id=roomName)
 
     def Start(self, model=None):
