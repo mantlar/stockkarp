@@ -54,7 +54,7 @@ class DQNAgent:
             state = torch.FloatTensor(state)
         if not isinstance(next_state, torch.Tensor):
             next_state = torch.FloatTensor(next_state)
-        print(f"Remembering {state}, {action}, {reward}, {next_state}, {done}")
+        # print(f"Remembering {state}, {action}, {reward}, {next_state}, {done}")
         self.memory.append((state, action, reward, next_state, done))
     
     def act(self, state, valid_actions_mask):

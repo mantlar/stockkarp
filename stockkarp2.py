@@ -1,4 +1,5 @@
 import os
+import logging
 from random import choice, randint, shuffle
 from websocket import WebSocket, WebSocketTimeoutException
 import threading
@@ -6,7 +7,6 @@ import requests
 import json
 import re
 from dqn import *
-import logging
 
 # Initialize logger
 logging.basicConfig(
@@ -28,6 +28,7 @@ PASSWORD = CONFIG["login"]["password"]
 class LoginException(Exception):
     def __init__(self, res):
         self.res = res
+        logging.error("Login failed. Response: %s", res)
 
     def __str__(self):
         return repr(self.res)
@@ -54,8 +55,6 @@ class ShowdownBattle(object):
     def __str__(self) -> str:
         return f"[BATTLE] {self._roomId} : {self._p1Name} vs {self._p2Name}; [ACTIVE] {self._active}; [SIDE] {self._side}"
 
-    
-
 class ShowdownConnection(object):
     """ Class that represents a showdown session. Start session using loginToServer """
     def __init__(self, username, password, useTeams=None, timeout=1):
@@ -80,10 +79,9 @@ class ShowdownConnection(object):
         else:
             self.useTeams = useTeams
         self.agent = DQNAgent(state_size=12, action_size=9)  # 13 features, 9 actions
-        if os.path.exists("model.pth"):
-            self.agent.load_model("model.pth")
         self.batch_size = 32
         self.last_battle_id = None
+        logging.info("Initialized ShowdownConnection for username: %s", username)
 
     def _get_state_vector(self, reqObject):
         """Convert battle state to numerical vector"""
@@ -170,11 +168,12 @@ class ShowdownConnection(object):
             valid_actions[4 + j] = True
         
         return valid_actions
-    
+
     def loginToServer(self, url=SHOWDOWN_WS_URL):
         """ Connects self.webSocket to the showdown server at url. """
         if not self.loggedIn:
             self.webSocket.connect(url)
+            logging.info("Connected to server: %s", url)
 
     def sendCommand(self, command, room_id=None):
         """ Sends the given command, starting with "/", to the given room, or global if not specified. """
@@ -184,6 +183,7 @@ class ShowdownConnection(object):
         if command[0] != "/":
             command = "/" + command
         self.webSocket.send(room_id + "|" + command)
+        logging.info("Sent command to server: %s", command)
 
     def loopRecv(self):
         while not self._exit:
@@ -195,13 +195,14 @@ class ShowdownConnection(object):
                         msg = msg[1:].split("|")
                     for h in self._messageHandlers:
                         if msg[0].startswith(h) and self._messageHandlers[h](msg):
+                            logging.info("Handled message: %s", msg)
                             break
-                        
-    
+
     def handleRequest(self, args, roomid):
         capture = True
         req_object = json.loads(args[1])
         if not 'wait' in req_object:
+            logging.info("Handling request for battle: %s", roomid)
             self.decideAction(req_object, roomName=roomid)
         return capture
 
@@ -212,6 +213,7 @@ class ShowdownConnection(object):
         message = args[3]
         messageSplit = message.split()
         if pmTo == self.username and pmFrom != self.username and messageSplit[0].startswith('/'):
+            logging.info("Received PM command from %s: %s", pmFrom, message)
             command = messageSplit[0][1:]
             if command == "log":
                 pass
@@ -222,9 +224,8 @@ class ShowdownConnection(object):
                     useTeam = "null"
                 self.sendCommand("/utm " + useTeam)
                 self.sendCommand("/accept " + pmFrom)
-
+                logging.info("Accepted challenge from %s", pmFrom)
         return capture
-
 
     def handleChallStr(self, args):
         capture = True
@@ -234,10 +235,11 @@ class ShowdownConnection(object):
         challRequest = requests.post("https://play.pokemonshowdown.com/api/login", data={"name" : self.username, "pass" : self.password, "challstr" : challstr})
         challRequest = json.loads(challRequest.content[1:])     # first character of challenge response is ], rest is json format 
         if not 'assertion' in challRequest.keys():
+            logging.error("Login failed. Challenge response: %s", challRequest)
             raise LoginException(challRequest)
         self.sendCommand("/trn " + self.username +",0," + challRequest['assertion'])
         self.loggedIn = True
-        print("Login successful! Awaiting challenge.")
+        logging.info("Successfully logged in as %s", self.username)
         return capture
 
     def handleUpdateSearch(self, args):
@@ -251,8 +253,10 @@ class ShowdownConnection(object):
                     newGame._format = isplit[1]
                     newGame._roomId = int(isplit[2])
                     self._currentBattles[i] = newGame
+                    logging.info("New battle detected: %s", i)
         elif searchjson["games"] == None:
             self._currentBattles.clear()
+            logging.info("No games found. Clearing current battles.")
         return capture
 
     def handleRoomUpdate(self, args):
@@ -305,21 +309,20 @@ class ShowdownConnection(object):
                                 terminal_state = [0] * len(battle.last_state)
                                 self.agent.remember(battle.last_state, battle.last_action, reward, terminal_state, True)
                                 self.agent.replay(self.batch_size)
-                                self.agent.save_model("model.pth")
+                                torch.save(self.agent.model, "model.pth")
                             
-                            # Reset battle state
-                            battle.last_state = None
-                            battle.last_action = None
-                            battle.last_valid_actions = None
-                        
-                        print(f"\nBattle Ended, {winner} won")
-                        self.sendCommand("/leave", roomId)
-                        if roomId in self._currentBattles:
-                            del self._currentBattles[roomId]
+                            # Log the battle outcome
+                            logging.info("Battle %s ended. Winner: %s", roomId, winner)
+                            logging.info("Final reward: %s", reward)
+                            
+                            self.sendCommand("/leave", roomId)
+                            if roomId in self._currentBattles:
+                                del self._currentBattles[roomId]
         return capture
 
     def handleNotImplemented(self, args):
         capture = False
+        logging.warning("Unhandled message received: %s", args)
         return capture
 
     def recvAllFromServer(self):
@@ -329,10 +332,11 @@ class ShowdownConnection(object):
                 try:
                     a = self.webSocket.recv()
                     pl += [a]
+                    logging.info("Received message from server: %s", a)
                 except WebSocketTimeoutException:
                     break
-            if len(pl) > 0:
-                self.lastMsgRecvd = pl
+        if len(pl) > 0:
+            self.lastMsgRecvd = pl
         return pl
 
     def sendChallenge(self, player, format, team=None):
@@ -340,32 +344,7 @@ class ShowdownConnection(object):
             team = "null"
         self.sendCommand("/utm " + team)
         self.sendCommand("/challenge " + player + ", " + format)
-        
-
-    # def decideAction(self, reqObject, roomName):
-    #     if ("teamPreview" in reqObject and reqObject["teamPreview"] == True):
-    #         order = ["1", "2", "3", "4", "5", "6"]
-    #         shuffle(order)
-    #         order = ''.join(order)
-    #         print("sending team " + order)
-    #         self.sendCommand("/choose team " + order, room_id=roomName)
-    #     elif ("forceSwitch" in reqObject and reqObject["forceSwitch"] == [True]):
-    #         switches = []
-    #         for i, v in enumerate(reqObject["side"]["pokemon"]):
-    #             if v["active"] == False and v["condition"] != "0 fnt":
-    #                 switches.append(i + 1)
-    #         c = choice(switches)
-    #         print("switching to " + str(c))
-    #         self.sendCommand("/choose switch " + str(c), room_id=roomName)
-    #     else:
-    #         if not "wait" in reqObject.keys() or reqObject["wait"] == "False":
-    #             choices = []
-    #             for i in reqObject["active"][0]["moves"]:
-    #                 if not "disabled" in i.keys() or i["disabled"] == False:
-    #                     choices.append(i["id"])
-    #             c = choice(choices)
-    #             print("using move " + c)
-    #             self.sendCommand("/choose move " + c, room_id=roomName)
+        logging.info("Sent challenge to player: %s", player)
 
     def decideAction(self, reqObject, roomName):
         battle = self._currentBattles.get(roomName)
@@ -431,11 +410,13 @@ class ShowdownConnection(object):
                 self.agent.model = model
             self.loginToServer()
             self.webSocketThread.start()
+            logging.info("Started ShowdownConnection. Username: %s", self.username)
 
     def Stop(self):
         if self.loggedIn:
             self._exit = True
             self.webSocketThread.join()
+            logging.info("Stopped ShowdownConnection. Username: %s", self.username)
 
 def pokepasteToPacked(url):
     packTeam = ""
@@ -485,7 +466,6 @@ def pokepasteToPacked(url):
             packTeam += f"{species}||{item}|{ability.lower()}|{moves}|{nature.lower()}|{evs}||{ivs}|||]"
     return packTeam[:-1] # strip final ] character
 
-        
 def packEvs(evList):
     evs = ["", "", "", "", "", ""]
     for i in evList:
@@ -501,6 +481,7 @@ def packEvs(evList):
             evs[4] = i[:-4]
         elif i[-3:] == "Spe":
             evs[5] = i[:-4]
+    logging.info("Packed EVs: %s", evs)
     return ",".join(evs)
 
 if __name__ == "__main__":
@@ -516,7 +497,7 @@ if __name__ == "__main__":
         ascii_lines = ascii.readlines()
         for i in ascii_lines:
             print(i, end='')
-    print("Logging in.")
+    logging.info("Starting main script. Loading teams and initializing connection.")
     useTeams = {
             "gen9ou" : GEN9_USE_TEAM,
             "gen3ou" : pokepasteToPacked(choice(teams))
@@ -525,7 +506,10 @@ if __name__ == "__main__":
     # 
     # loginThread.start()
     # loginThread.join()
-
-    sd.Start()
+    model = None
+    if os.path.exists("./model.pth"):
+        model = torch.load("model.pth")
+        logging.info("Loaded existing model from model.pth")
+    sd.Start(model=model)
     while not sd._exit:
         pass
