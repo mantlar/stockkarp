@@ -72,6 +72,8 @@ class ShowdownConnection(object):
         else:
             self.useTeams = useTeams
         self.agent = DQNAgent(state_size=12, action_size=9)  # 13 features, 9 actions
+        if os.path.exists("model.pth"):
+            self.agent.load_model("model.pth")
         self.batch_size = 32
         self.last_battle_id = None
 
@@ -227,6 +229,7 @@ class ShowdownConnection(object):
             raise LoginException(challRequest)
         self.sendCommand("/trn " + self.username +",0," + challRequest['assertion'])
         self.loggedIn = True
+        print("Login successful! Awaiting challenge.")
         return capture
 
     def handleUpdateSearch(self, args):
@@ -294,7 +297,7 @@ class ShowdownConnection(object):
                                 terminal_state = [0] * len(battle.last_state)
                                 self.agent.remember(battle.last_state, battle.last_action, reward, terminal_state, True)
                                 self.agent.replay(self.batch_size)
-                                torch.save(self.agent.model, "model.pth")
+                                self.agent.save_model("model.pth")
                             
                             # Reset battle state
                             battle.last_state = None
@@ -498,8 +501,7 @@ if __name__ == "__main__":
     # 
     # loginThread.start()
     # loginThread.join()
-    if os.path.exists("./model.pth"):
-        model = torch.load("model.pth")
-    sd.Start(model=model)
+
+    sd.Start()
     while not sd._exit:
         pass
