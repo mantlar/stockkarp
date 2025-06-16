@@ -1,6 +1,7 @@
 import os
 import logging
 from random import choice, randint, shuffle
+import time
 from websocket import WebSocket, WebSocketTimeoutException
 import threading
 import requests
@@ -37,6 +38,7 @@ class ShowdownBattle(object):
     """ Showdown battle context """
     def __init__(self):
         self._roomId = 0
+        self._roomName = ""
         self._format = ""
         self._p1Name = ""
         self._p2Name = ""
@@ -197,6 +199,7 @@ class ShowdownConnection(object):
                         if msg[0].startswith(h) and self._messageHandlers[h](msg):
                             logging.info("Handled message: %s", msg)
                             break
+            time.sleep(CONFIG["loopSleep"])
 
     def handleRequest(self, args, roomid):
         capture = True
@@ -252,6 +255,7 @@ class ShowdownConnection(object):
                     newGame = ShowdownBattle()
                     newGame._format = isplit[1]
                     newGame._roomId = int(isplit[2])
+                    newGame._roomName = i
                     self._currentBattles[i] = newGame
                     logging.info("New battle detected: %s", i)
         elif searchjson["games"] == None:
