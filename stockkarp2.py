@@ -26,6 +26,8 @@ USERNAME = CONFIG["login"]["username"]
 # SHOWDOWN PASSWORD
 PASSWORD = CONFIG["login"]["password"]
 
+VALUE_UNKNOWN = -1      # value representing unknown state variable (i.e. yet-to-be-revealed pokemon, pp on pokemon that haven't been active yet)
+
 class LoginException(Exception):
     def __init__(self, res):
         self.res = res
@@ -33,6 +35,97 @@ class LoginException(Exception):
 
     def __str__(self):
         return repr(self.res)
+
+class ShowdownPokemon:
+    def __init__(self, pokemon_data=None):
+        self.ident = VALUE_UNKNOWN
+        self.details = VALUE_UNKNOWN
+        self.species = VALUE_UNKNOWN
+        self.level = VALUE_UNKNOWN
+        self.gender = VALUE_UNKNOWN
+        self.raw_data = pokemon_data if pokemon_data else {}
+        self.stats = {"atk" : VALUE_UNKNOWN, "def" : VALUE_UNKNOWN, "spa" : VALUE_UNKNOWN, "spd" : VALUE_UNKNOWN, "spe" : VALUE_UNKNOWN} # HP, Atk, Def, SpA, SpD, Spe
+        self.statBoosts = {"atk" : 0, "def" : 0, "spa" : 0, "spd" : 0, "spe" : 0} # HP, Atk, Def, SpA, SpD, Spd
+        self.hp_percentage = 1.0  # Default to full HP if not specified
+        self.statusCondition = VALUE_UNKNOWN  # 'brn', 'psn', etc.
+        self.moves = [{
+            "move": VALUE_UNKNOWN,
+            "id": VALUE_UNKNOWN,
+            "pp": VALUE_UNKNOWN,
+            "maxpp": VALUE_UNKNOWN,
+            "target": VALUE_UNKNOWN,
+            "disabled": False
+            }, {
+            "move": VALUE_UNKNOWN,
+            "id": VALUE_UNKNOWN,
+            "pp": VALUE_UNKNOWN,
+            "maxpp": VALUE_UNKNOWN,
+            "target": VALUE_UNKNOWN,
+            "disabled": False
+            }, {
+            "move": VALUE_UNKNOWN,
+            "id": VALUE_UNKNOWN,
+            "pp": VALUE_UNKNOWN,
+            "maxpp": VALUE_UNKNOWN,
+            "target": VALUE_UNKNOWN,
+            "disabled": False
+            }, {
+            "move": VALUE_UNKNOWN,
+            "id": VALUE_UNKNOWN,
+            "pp": VALUE_UNKNOWN,
+            "maxpp": VALUE_UNKNOWN,
+            "target": VALUE_UNKNOWN,
+            "disabled": False
+            }]  # List of move dictionaries
+        self.ability = VALUE_UNKNOWN
+        self.baseAbility = VALUE_UNKNOWN
+        self.item = VALUE_UNKNOWN
+        self.is_active = False
+        if pokemon_data:
+            self.update_from_data(pokemon_data)
+
+    def update_from_data(self, pokemon_data):
+        if 'ident' in pokemon_data:
+            self.ident = pokemon_data["ident"][4:].lower()  # strip "p1:" or "p2: "
+        if 'details' in pokemon_data:
+            self.details = pokemon_data["details"]
+            detailSplit = [x.strip() for x in pokemon_data["details"].split(",")]
+            self.species = detailSplit[0]
+            self.level = int(detailSplit[1][1:])
+            if len(detailSplit) > 2:
+                self.gender = detailSplit[2]
+        if 'condition' in pokemon_data:
+            conditionSplit = pokemon_data["condition"].split()
+            # check for status condition
+            if len(conditionSplit) > 1:
+                self.statusCondition = conditionSplit[1]
+            else:
+                self.statusCondition = None
+            hpSplit = conditionSplit[0].split('/')
+            if len(hpSplit) > 1:
+                self.hp_percentage = int(hpSplit[0]) / int(hpSplit[1])
+            else:
+                # condition is 0 fnt
+                self.hp_percentage = 0
+        if 'active' in pokemon_data and pokemon_data['active']:
+            self.is_active = True
+        if 'moves' in pokemon_data:
+            # moves from the side object are only id's, the real move objects are only revealed upon 
+            # the first time we get valid move ids, we make new move objects and replace the value unknown ones
+            self.moves = [x for x in self.moves if x["id"] != VALUE_UNKNOWN]
+            new_pkmn_moves = []
+            for i in pokemon_data['moves']:
+                if not i in [x["id"] for x in self.moves]:
+                    new_pkmn_moves.append({"move" : "unknown", "id": i, "pp": -1, "maxpp": -1, "target": -1, "disabled": -1})
+            self.moves.extend(new_pkmn_moves)
+        if "stats" in pokemon_data:
+            self.stats = pokemon_data["stats"]
+        if 'baseAbility' in pokemon_data:
+            self.baseAbility = pokemon_data['baseAbility']
+        if 'ability' in pokemon_data:
+            self.ability = pokemon_data['ability']
+        if 'item' in pokemon_data:
+            self.item = pokemon_data['item']
 
 class ShowdownBattle(object):
     """ Showdown battle context """
@@ -43,19 +136,45 @@ class ShowdownBattle(object):
         self._p1Name = ""
         self._p2Name = ""
         self._playerNumber = -1
-        self._active = {}
-        self._side = {}
-        self._opposingActive = {}
-        self._opposingSide = {}
+        self._playerSide : list[ShowdownPokemon] = []  # List of ShowdownPokemon instances for the player's team
+        self._opposingSide : list[ShowdownPokemon] = []   # List of ShowdownPokemon instances for the opponent's team
+        self._activePlayerPokemon : ShowdownPokemon = None  # Currently active Pokémon of the player
+        self._activeOpponentPokemon : ShowdownPokemon = None  # Currently active Pokémon of the opponent
         self.last_state = None
         self.last_action = None
         self.last_valid_actions = None
+
+    def update_player_side(self, side_data):
+        for pokemon_data in side_data['pokemon']:
+            existing_pokemon = next((p for p in self._playerSide if p.raw_data.get('ident', '') == pokemon_data.get('ident', '')), None)
+            if existing_pokemon:
+                existing_pokemon.update_from_data(pokemon_data)
+            else:
+                new_pokemon = ShowdownPokemon(pokemon_data=pokemon_data)
+                self._playerSide.append(new_pokemon)
+                if new_pokemon.is_active:
+                    self._activePlayerPokemon = new_pokemon
+
+    def update_active_pokemon(self, active_data):
+        """ Parse the active object in the request object. """
+        self._activePlayerPokemon.moves = active_data[0]["moves"]
+
+    def update_opposing_side(self, opposing_data):
+        for pokemon_data in opposing_data['pokemon']:
+            existing_pokemon = next((p for p in self._opposingSide if p.raw_data.get('ident', '') == pokemon_data.get('ident', '')), None)
+            if existing_pokemon:
+                existing_pokemon.update_from_data(pokemon_data)
+            else:
+                new_pokemon = ShowdownPokemon(pokemon_data)
+                self._opposingSide.append(new_pokemon)
+                if new_pokemon.is_active:
+                    self._activeOpponentPokemon = new_pokemon
 
     def __repr__(self) -> str:
         return self.__str__() 
     
     def __str__(self) -> str:
-        return f"[BATTLE] {self._roomId} : {self._p1Name} vs {self._p2Name}; [ACTIVE] {self._active}; [SIDE] {self._side}"
+        return f"[BATTLE] {self._roomId} : {self._p1Name} vs {self._p2Name}; [ACTIVE] {self._activePlayerPokemon}; [SIDE] {self._playerSide}"
 
 class ShowdownConnection(object):
     """ Class that represents a showdown session. Start session using loginToServer """
@@ -197,7 +316,7 @@ class ShowdownConnection(object):
                         msg = msg[1:].split("|")
                     for h in self._messageHandlers:
                         if msg[0].startswith(h) and self._messageHandlers[h](msg):
-                            logging.info("Handled message: %s", msg)
+                            # logging.info("Handled message: %s", msg)
                             break
             time.sleep(CONFIG["loopSleep"])
 
@@ -206,7 +325,31 @@ class ShowdownConnection(object):
         req_object = json.loads(args[1])
         if not 'wait' in req_object:
             logging.info("Handling request for battle: %s", roomid)
-            self.decideAction(req_object, roomName=roomid)
+            battle = self._currentBattles.get(roomid)
+            if battle:
+                if 'side' in req_object:
+                    battle.update_player_side(req_object['side'])
+                if 'active' in req_object:
+                    battle.update_active_pokemon(req_object["active"])
+                if 'opposingSide' in req_object:
+                    battle.update_opposing_side(req_object['opposingSide'])
+                self.decideAction(reqObject=json.loads(args[1]), roomName=roomid)
+        return capture
+
+    def handleTurn(self, lines, roomid):
+        capture = True
+        battle = self._currentBattles.get(roomid)
+        if battle:
+            for i in lines:
+                if i.startswith("|"):
+                    i = i[1:]
+                isplit = i.split("|")
+                event = isplit[0]
+                if event == "switch":
+                    slot = isplit[1][0:3]
+                    name = isplit[1][5:]
+                    details = isplit[2]
+                    hp = isplit[3]
         return capture
 
     def handlePm(self, args):
@@ -266,7 +409,7 @@ class ShowdownConnection(object):
     def handleRoomUpdate(self, args):
         capture = True
         lines = args.split("\n")
-        for l in lines:
+        for i, l in enumerate(lines):
             if l.startswith("|"):
                 l = l[1:]
             lineSplit = l.split("|")
@@ -287,6 +430,8 @@ class ShowdownConnection(object):
                                 game._playerNumber = "p2"
                     elif command == "switch":
                         pass
+                    elif command == "updateuser":
+                        pass
                     elif command == "rule":
                         pass
                     elif command == "tier":
@@ -299,6 +444,8 @@ class ShowdownConnection(object):
                         pass
                     elif command == "request":
                         self.handleRequest(lineSplit, roomId)
+                    elif command == "t:":
+                        self.handleTurn(lines[i:], roomId)
                     elif "win" in lineSplit:
                         winner = lineSplit[-1]
                         roomId = roomId.strip()
@@ -408,7 +555,42 @@ class ShowdownConnection(object):
         logging.info("Executing command: %s", command)
         self.sendCommand(command, room_id=roomName)
 
+    def type_to_index(self, type_str):
+        type_map = {
+            '': 0,
+            'normal': 1,
+            'fire': 2,
+            'water': 3,
+            'electric': 4,
+            'grass': 5,
+            'ice': 6,
+            'fighting': 7,
+            'poison': 8,
+            'ground': 9,
+            'flying': 10,
+            'psychic': 11,
+            'bug': 12,
+            'rock': 13,
+            'ghost': 14,
+            'steel': 15,
+            'dragon': 16,
+            'dark': 17,
+            'fairy': 18,
+            'unknown': 19,
+            'shadow': 20
+        }
+        return type_map.get(type_str, 0)
+
+    def _get_condition_index(self, condition):
+        condition_map = {'': 0, 'brn': 1, 'psn': 2, 'par': 3, 'slp': 4, 'frz': 5}
+        return condition_map.get(condition, 0)
+
+    def _get_move_id_hash(self, move_id):
+        # Simple hash function for move IDs
+        return abs(hash(move_id)) % (2 ** 32)
+
     def Start(self, model=None):
+        logging.info("%s \nStarting Stockkarp.", ("=" * 100))
         if not self.loggedIn:
             if model != None:
                 self.agent.model = model
@@ -489,6 +671,15 @@ def packEvs(evList):
     return ",".join(evs)
 
 if __name__ == "__main__":
+    try:
+        os.remove("./training.log")
+        print(f"File ./training.log deleted successfully.")
+    except FileNotFoundError:
+        print(f"File ./training.log not found.")
+    except PermissionError:
+        print(f"Permission denied to delete './training.log")
+    except OSError as e:
+        print(f"Error deleting './training.log': {e}")
     GEN9_USE_TEAM = \
         "Gliscor||toxicorb|poisonheal|poisonjab,knockoff,protect,spikes|Impish|244,,248,,16,|||||]\
         Alomomola||heavydutyboots|regenerator|scald,flipturn,wish,protect|Sassy|4,,252,,252,|||||]\
@@ -511,7 +702,8 @@ if __name__ == "__main__":
     # loginThread.start()
     # loginThread.join()
     model = None
-    if os.path.exists("./model.pth"):
+    dry = True
+    if os.path.exists("./model.pth") and not dry:
         model = torch.load("model.pth")
         logging.info("Loaded existing model from model.pth")
     sd.Start(model=model)
