@@ -94,22 +94,19 @@ class ShowdownPokemon:
             # strip "p1:" or "p2: "
             self.ident = pokemon_data["ident"]
         if 'details' in pokemon_data:
-            self.details = pokemon_data["details"]
-            detailSplit = [x.strip()
-                           for x in pokemon_data["details"].split(",")]
-            self.species = detailSplit[0]
-
-            if len(detailSplit[1]) > 1 and detailSplit[1][1:].isnumeric():
-                self.level = int(detailSplit[1][1:])
+            details = pokemon_data['details']
+            # Regular expression to parse the details string
+            # Groups: 1 - species, 2 - level, 3 - gender
+            match = re.match(r'^(.+?)(?:,\s*L(\d+))?(?:,\s*([MF]))?$', details)
+            if match:
+                self.species = match.group(1).strip()
+                self.level = int(match.group(2)) if match.group(2) else 100
+                self.gender = match.group(3) if match.group(3) else '-'
             else:
+                # If the format is not recognized, default to the full details string as species
+                self.species = details
                 self.level = 100
-                
-            if len(detailSplit) > 2:
-                self.gender = detailSplit[2]
-            elif len(detailSplit) > 1:
-                self.gender = detailSplit[1]
-            else:
-                self.gender = "-"
+                self.gender = '-'
         if 'condition' in pokemon_data:
             conditionSplit = pokemon_data["condition"].split()
             # check for status condition
@@ -859,7 +856,7 @@ if __name__ == "__main__":
     # loginThread.start()
     # loginThread.join()
     model = None
-    dry = True
+    dry = CONFIG["dry"]
     if os.path.exists("./model.pth") and not dry:
         model = torch.load("model.pth")
         logging.info("Loaded existing model from model.pth")
