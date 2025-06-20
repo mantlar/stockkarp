@@ -1,3 +1,4 @@
+import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -8,7 +9,7 @@ import logging
 
 # Initialize logger
 logging.basicConfig(
-    filename="training.log",
+    filename=f"training-{time.ctime(time.time())}.log".replace(" ", "").replace(":", ""),
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )

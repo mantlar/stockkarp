@@ -11,7 +11,7 @@ from dqn import *
 
 # Initialize logger
 logging.basicConfig(
-    filename="training.log",
+    filename=f"training-{time.ctime(time.time())}.log".replace(" ", "").replace(":", ""),
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
@@ -95,6 +95,7 @@ class ShowdownPokemon:
             self.ident = pokemon_data["ident"]
         if 'details' in pokemon_data:
             details = pokemon_data['details']
+            self.details = details
             # Regular expression to parse the details string
             # Groups: 1 - species, 2 - level, 3 - gender
             match = re.match(r'^(.+?)(?:,\s*L(\d+))?(?:,\s*([MF]))?$', details)
@@ -385,22 +386,46 @@ class ShowdownConnection(object):
                     if pokemon:
                         pokemon.details = details
                 if event == "switch":
-                    slot = linesplit[1][0:3]
-                    name = linesplit[1][5:]
-                    details = linesplit[2]
-                    hp = linesplit[3]
-                    isPlayerSwitch = ((playerNumber == 1 and slot == "p1a") or (playerNumber == 2 and slot == "p2a"))
-                    if isPlayerSwitch:
-                        switchpoke = [x for x in battle._playerSide if x.details == details]
-                        if len(switchpoke) > 0:
-                            battle._activePlayerPokemon = switchpoke[0]
-                    else:
-                        switchpoke = [x for x in battle._opposingSide if x.details == details]
-                        if len(switchpoke) > 0:
-                            battle._activeOpponentPokemon = switchpoke[0]
+                    # TODO reset stat stages on switch
+                    parts = linesplit
+                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
+                    details = parts[2]
+                    hp_ratio = ''.join([x for x in parts[3] if x.isnumeric() or x == "/"])
+                    currHp, maxHp = tuple(hp_ratio.split("/"))
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    if pokemon:
+                        if targetSide == battle._playerSide:
+                            battle._activePlayerPokemon = pokemon
+                        else:
+                            battle._activeOpponentPokemon = pokemon
+                        pokemon.hp_percentage = float(currHp) / float(maxHp)
+                        pokemon.statBoosts = {"atk": 6, "def": 6, "spa": 6,
+                           "spd": 6, "spe": 6}
+                    # we don't *really* care about updating the player's active pokemon here since the request will do it anyway
+                    # but we do need to have something in the active opponent side for decision making
+                    elif targetSide == battle._opposingSide:
+                        newPoke = ShowdownPokemon()
+                        newPoke.ident = pokemon_name
+                        newPoke.details = details
+                        newPoke.hp_percentage = float(currHp) / float(maxHp)
+                        battle._activeOpponentPokemon = newPoke
+                        battle._opposingSide.append(newPoke)
+
                 elif event == "move":
-                    # TODO pp drain and move discovery
-                    pass
+                    # TODO pp drain and move targeting type discovery (not super relevant for singles but might indicate a boosting move)
+                    parts = linesplit
+                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
+                    moveid = parts[2].lower().replace(" ", "").replace("-", "")
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    if pokemon:
+                        if targetSide == battle._opposingSide:
+                            unknownmoves = [x for x in pokemon.moves if x["id"] == VALUE_UNKNOWN]
+                            knownmoveids = [x["id"] for x in pokemon.moves if x["id"] != VALUE_UNKNOWN]
+                            if len(unknownmoves) > 0 and not moveid in knownmoveids:
+                                unknownmoves[0]["id"] = moveid
+                                unknownmoves[0]["move"] = parts[2]
                 elif event == "-damage":
                     # Handle damage events
                     parts = linesplit
@@ -467,6 +492,24 @@ class ShowdownConnection(object):
                         current_boost = pokemon.statBoosts[stat]
                         stat_boost = {stat: max(0, current_boost - int(boost))}
                         pokemon.statBoosts.update(stat_boost)
+                elif event == "-ability":
+                    # |-ability|p1a: Dialga|Pressure
+                    parts = linesplit
+                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
+                    abilityname = parts[2].lower().replace(" ", "").replace("-", "")
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    if pokemon:
+                        pokemon.ability = abilityname
+                elif event == "-item":
+                    # |-item|p1a: Gurdurr|Choice Specs|[from] move: Trick
+                    parts = linesplit
+                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
+                    item = parts[2].lower().replace(" ", "").replace("-", "")
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    if pokemon:
+                        pokemon.item = item
                 elif event == "-fail":
                     # TODO handle move failure
                     pass
