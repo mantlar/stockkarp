@@ -52,7 +52,7 @@ class ShowdownPokemon:
         self.stats = {"atk": VALUE_UNKNOWN, "def": VALUE_UNKNOWN, "spa": VALUE_UNKNOWN,
                       "spd": VALUE_UNKNOWN, "spe": VALUE_UNKNOWN}  # HP, Atk, Def, SpA, SpD, Spe
         self.statBoosts = {"atk": 6, "def": 6, "spa": 6,
-                           "spd": 6, "spe": 6}  # HP, Atk, Def, SpA, SpD, Spd
+                           "spd": 6, "spe": 6, "accuracy" : 6, "evasion" : 6}  # HP, Atk, Def, SpA, SpD, Spd
         self.hp_percentage = 1.0  # Default to full HP if not specified
         self.statusCondition = VALUE_UNKNOWN  # 'brn', 'psn', etc.
         self.moves = [{
@@ -88,6 +88,12 @@ class ShowdownPokemon:
         self.baseAbility = VALUE_UNKNOWN
         self.item = VALUE_UNKNOWN
         self.is_active = False
+        self.bst = VALUE_UNKNOWN
+        self.base_stats = {"atk": VALUE_UNKNOWN, "def": VALUE_UNKNOWN, "spa": VALUE_UNKNOWN,
+                      "spd": VALUE_UNKNOWN, "spe": VALUE_UNKNOWN}
+        self.potential_abilities = []
+        self.type = VALUE_UNKNOWN
+        self.type2 = VALUE_UNKNOWN
         if pokemon_data:
             self.update_from_data(pokemon_data)
 
@@ -100,16 +106,19 @@ class ShowdownPokemon:
             self.details = details
             # Regular expression to parse the details string
             # Groups: 1 - species, 2 - level, 3 - gender
-            match = re.match(r'^(.+?)(?:,\s*L(\d+))?(?:,\s*([MF]))?$', details)
+            match = re.match(r'^(.+?)(?:,\s*L(\d+))?(?:,\s*([MF]))?(?:,\s*(shiny))?$', details)
             if match:
                 self.species = match.group(1).strip()
                 self.level = int(match.group(2)) if match.group(2) else 100
                 self.gender = match.group(3) if match.group(3) else '-'
+                # Check for shiny status
+                self.is_shiny = True if match.group(4) else False
             else:
                 # If the format is not recognized, default to the full details string as species
                 self.species = details
                 self.level = 100
                 self.gender = '-'
+                self.is_shiny = False
         if 'condition' in pokemon_data:
             conditionSplit = pokemon_data["condition"].split()
             # check for status condition
@@ -178,6 +187,7 @@ class ShowdownBattle(object):
             else:
                 new_pokemon = ShowdownPokemon(pokemon_data=pokemon_data)
                 self._connection.sendCommand(f"/details {new_pokemon.species}")
+                time.sleep(1)
                 self._playerSide.append(new_pokemon)
                 if new_pokemon.is_active:
                     self._activePlayerPokemon = new_pokemon
@@ -431,33 +441,43 @@ class ShowdownConnection(object):
                         (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
                         if targetSide == battle._playerSide:
+                            battle._activePlayerPokemon.statBoosts = {"atk": 6, "def": 6, "spa": 6,
+                           "spd": 6, "spe": 6, "accuracy" : 6, "evasion" : 6}
                             battle._activePlayerPokemon = pokemon
                         else:
                             battle._activeOpponentPokemon = pokemon
                         pokemon.hp_percentage = float(currHp) / float(maxHp)
-                        pokemon.statBoosts = {"atk": 6, "def": 6, "spa": 6,
-                                              "spd": 6, "spe": 6}
+                        battle._activeOpponentPokemon.statBoosts = {"atk": 6, "def": 6, "spa": 6,
+                           "spd": 6, "spe": 6, "accuracy" : 6, "evasion" : 6}
                     # we don't *really* care about updating the player's active pokemon here since the request will do it anyway
                     # but we do need to have something in the active opponent side for decision making
                     elif targetSide == battle._opposingSide:
                         newPoke = ShowdownPokemon()
                         newPoke.ident = pokemon_name
                         newPoke.details = details
-                        match = re.match(
-                            r'^(.+?)(?:,\s*L(\d+))?(?:,\s*([MF]))?$', details)
+                        match = re.match(r'^(.+?)(?:,\s*L(\d+))?(?:,\s*([MF]))?(?:,\s*(shiny))?$', details)
                         if match:
                             newPoke.species = match.group(1).strip()
-                            newPoke.level = int(match.group(
-                                2)) if match.group(2) else 100
-                            newPoke.gender = match.group(
-                                3) if match.group(3) else '-'
+                            newPoke.level = int(match.group(2)) if match.group(2) else 100
+                            newPoke.gender = match.group(3) if match.group(3) else '-'
+                            # Check for shiny status
+                            newPoke.is_shiny = True if match.group(4) else False
                         else:
                             # If the format is not recognized, default to the full details string as species
                             newPoke.species = details
                             newPoke.level = 100
                             newPoke.gender = '-'
-                        self.sendCommand(f"/details {newPoke.species}")
+                            newPoke.is_shiny = False
+                        if newPoke.species != -1:
+                            self.sendCommand(f"/details {newPoke.species}")
+                        time.sleep(1)
                         newPoke.hp_percentage = float(currHp) / float(maxHp)
+                        conditionSplit = parts[3].split()
+                        # check for status condition
+                        if len(conditionSplit) > 1:
+                            newPoke.statusCondition = conditionSplit[1]
+                        else:
+                            newPoke.statusCondition = None
                         battle._activeOpponentPokemon = newPoke
                         battle._opposingSide.append(newPoke)
 
@@ -480,6 +500,8 @@ class ShowdownConnection(object):
                             if len(unknownmoves) > 0 and not moveid in knownmoveids:
                                 unknownmoves[0]["id"] = moveid
                                 unknownmoves[0]["move"] = parts[2]
+                                self.sendCommand(f"/details {moveid}")
+                                time.sleep(1)
                 elif event == "-damage":
                     # Handle damage events
                     parts = linesplit
@@ -636,15 +658,16 @@ class ShowdownConnection(object):
         """Update the battle with the new move information."""
         # Find the pokemon that could have this move
         for pokemon in battle._playerSide:
-            if any(move['id'] == move_details['name'].lower() for move in pokemon.moves):
+            if any(move['id'] == move_details['id'] for move in pokemon.moves):
                 # Update the move details
                 for move in pokemon.moves:
-                    if move['id'] == move_details['name'].lower():
+                    if move['id'] == move_details['id']:
                         move['type'] = move_details['type']
                         move['category'] = move_details['category']
                         move['power'] = move_details['power']
                         move['accuracy'] = move_details['accuracy']
                         move['pp'] = move_details['pp']
+                        move["maxpp"] = move_details["pp"]
                         move['description'] = move_details['description']
                         # Add additional details if available
                         if 'Priority' in move_details:
@@ -656,13 +679,16 @@ class ShowdownConnection(object):
                         break
         # Update opponent's moves if necessary
         for pokemon in battle._opposingSide:
-            if any(move['id'] == move_details['name'] for move in pokemon.moves):
+            if any(move['id'] == move_details['id'] for move in pokemon.moves):
                 # Update the move details (opponent's moves are not tracked, so just update the first matching move)
                 for move in pokemon.moves:
-                    if move['id'] == move_details['name']:
+                    if move['id'] == move_details['id']:
                         move['type'] = move_details['type']
                         move['category'] = move_details['category']
-                        move['power'] = move_details['power']
+                        if 'power' in move:
+                            move['power'] = move_details['power']
+                        else:
+                            move["power"] = 0
                         move['accuracy'] = move_details['accuracy']
                         move['pp'] = move_details['pp']
                         move['description'] = move_details['description']
@@ -681,20 +707,20 @@ class ShowdownConnection(object):
             if pokemon.species.lower() == new_details_obj['name'].lower():
                 # Update base stats
                 if 'base_stats' in new_details_obj:
-                    pokemon.stats = new_details_obj['base_stats']
+                    pokemon.base_stats = new_details_obj['base_stats']
                 # Update types
                 if 'types' in new_details_obj:
                     pokemon.type = new_details_obj['types'][0]
                     if len(new_details_obj['types']) > 1:
-                        pokemon.secondary_type = new_details_obj['types'][1]
+                        pokemon.type2 = new_details_obj['types'][1]
+                    else:
+                        pokemon.type2 = None
                 # Update abilities
                 if 'abilities' in new_details_obj:
-                    pokemon.ability = new_details_obj['abilities'][0]
-                    if len(new_details_obj['abilities']) > 1:
-                        pokemon.secondary_ability = new_details_obj['abilities'][1]
+                    pokemon.potential_abilities = new_details_obj['abilities']
                 # Update BST
                 if 'bst' in new_details_obj:
-                    pokemon.base_stats['bst'] = new_details_obj['bst']
+                    pokemon.bst = new_details_obj['bst']
                 # Update additional details
                 if 'Dex Colour' in new_details_obj:
                     pokemon.dex_colour = new_details_obj['Dex Colour']
@@ -709,20 +735,20 @@ class ShowdownConnection(object):
             if pokemon.species.lower() == new_details_obj['name'].lower():
                 # Update base stats
                 if 'base_stats' in new_details_obj:
-                    pokemon.stats = new_details_obj['base_stats']
+                    pokemon.base_stats = new_details_obj['base_stats']
                 # Update types
                 if 'types' in new_details_obj:
                     pokemon.type = new_details_obj['types'][0]
                     if len(new_details_obj['types']) > 1:
-                        pokemon.secondary_type = new_details_obj['types'][1]
+                        pokemon.type2 = new_details_obj['types'][1]
+                    else:
+                        pokemon.type2 = None
                 # Update abilities
                 if 'abilities' in new_details_obj:
-                    pokemon.ability = new_details_obj['abilities'][0]
-                    if len(new_details_obj['abilities']) > 1:
-                        pokemon.secondary_ability = new_details_obj['abilities'][1]
+                    pokemon.potential_abilities = new_details_obj['abilities']
                 # Update BST
                 if 'bst' in new_details_obj:
-                    pokemon.base_stats = new_details_obj['bst']
+                    pokemon.bst = new_details_obj['bst']
                 # Update additional details
                 if 'Dex Colour' in new_details_obj:
                     pokemon.dex_colour = new_details_obj['Dex Colour']
@@ -1041,6 +1067,7 @@ class ShowdownConnection(object):
         movename_tag = soup.find('span', class_='col movenamecol')
         if movename_tag:
             move_details['name'] = movename_tag.find('a').text.strip()
+            move_details['id'] = move_details['name'].lower().replace(" ", "").replace("-", "")
 
         # Extract type and category
         typecol_tag = soup.find('span', class_='col typecol')
@@ -1060,7 +1087,10 @@ class ShowdownConnection(object):
         if accuracy_tag:
             accuracy = accuracy_tag.find(
                 'br').next_sibling.strip().replace('%', '')
-            move_details['accuracy'] = int(accuracy)
+            if accuracy == "—":
+                move_details["accuracy"] = 255
+            else:
+                move_details['accuracy'] = int(accuracy)
 
         # Extract PP
         pp_tag = soup.find('span', class_='col pplabelcol')
@@ -1071,18 +1101,6 @@ class ShowdownConnection(object):
         desc_tag = soup.find('span', class_='col movedesccol')
         if desc_tag:
             move_details['description'] = desc_tag.text.strip()
-
-        # Extract additional details from font tag
-        font_tag = soup.find('font', size="1")
-        if font_tag:
-            parts = font_tag.text.split('&ThickSpace;')
-            for part in parts:
-                if not part:
-                    continue
-                key_value = part.strip().split(': ')
-                if len(key_value) == 2:
-                    key, value = key_value
-                    move_details[key.strip()] = value.strip()
 
         return move_details
 
