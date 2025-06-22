@@ -1,6 +1,5 @@
 import os
 import logging
-import queue
 from random import choice, randint, shuffle
 import time
 from websocket import WebSocket, WebSocketTimeoutException
@@ -177,7 +176,7 @@ class ShowdownBattle(object):
                 existing_pokemon.update_from_data(pokemon_data)
             else:
                 new_pokemon = ShowdownPokemon(pokemon_data=pokemon_data)
-                self._connection.queueCommand(f"/details {new_pokemon.species}")
+                self._connection.sendCommand(f"/details {new_pokemon.species}")
                 self._playerSide.append(new_pokemon)
                 if new_pokemon.is_active:
                     self._activePlayerPokemon = new_pokemon
@@ -211,10 +210,8 @@ class ShowdownConnection(object):
     def __init__(self, username, password, useTeams=None, timeout=1):
         self.webSocket = WebSocket()
         self.webSocket.settimeout(CONFIG["websocket"]["timeout"])
-        self.recvThread = threading.Thread(
+        self.webSocketThread = threading.Thread(
             target=self.loopRecv, name="loopThread", args=(), daemon=True)
-        self.sendThread = threading.Thread(
-            target=self.loopCommand, name="commandThread", args=(), daemon=True)
         self.username = username
         self.password = password
         self.loggedIn = False
@@ -228,7 +225,6 @@ class ShowdownConnection(object):
             "pm": self.handlePm,
             ">": self.handleRoomUpdate
         }
-        self._commandQueue = queue.Queue()
         if useTeams == None:
             self.useTeams = {}
         else:
@@ -357,15 +353,14 @@ class ShowdownConnection(object):
             self.webSocket.connect(url)
             logging.info("Connected to server: %s", url)
 
-    def queueCommand(self, command, room_id=None):
+    def sendCommand(self, command, room_id=None):
         """ Sends the given command, starting with "/", to the given room, or global if not specified. """
         if room_id == None:
             room_id = ""
         # in case i forget to add a slash
         if command[0] != "/":
             command = "/" + command
-        # self.webSocket.send(room_id + "|" + command)
-        self._commandQueue.put(command)
+        self.webSocket.send(room_id + "|" + command)
         logging.info("Sent command to server: %s", command)
 
     def loopRecv(self):
@@ -380,13 +375,6 @@ class ShowdownConnection(object):
                         if msg[0].startswith(h) and self._messageHandlers[h](msg):
                             # logging.info("Handled message: %s", msg)
                             break
-            time.sleep(CONFIG["loopSleep"])
-
-    def loopCommand(self):
-        while not self._exit:
-            cmdQ = self._commandQueue
-            cmd = cmdQ.get()
-            self.webSocket.send(cmd)
             time.sleep(CONFIG["loopSleep"])
 
     def handleRequest(self, args, roomid):
@@ -458,7 +446,7 @@ class ShowdownConnection(object):
                             newPoke.species = details
                             newPoke.level = 100
                             newPoke.gender = '-'
-                        self.queueCommand(f"/details {newPoke.species}")
+                        self.sendCommand(f"/details {newPoke.species}")
                         newPoke.hp_percentage = float(currHp) / float(maxHp)
                         battle._activeOpponentPokemon = newPoke
                         battle._opposingSide.append(newPoke)
@@ -713,8 +701,8 @@ class ShowdownConnection(object):
             useTeam = self.useTeams[messageSplit[1]] if messageSplit[1] in self.useTeams else "null"
             if useTeam == None:
                 useTeam = "null"
-            self.queueCommand("/utm " + useTeam)
-            self.queueCommand("/accept " + pmFrom)
+            self.sendCommand("/utm " + useTeam)
+            self.sendCommand("/accept " + pmFrom)
             logging.info("Accepted challenge from %s", pmFrom)
         elif command == "raw":
             # Parse the raw data and update the current battle
@@ -738,7 +726,7 @@ class ShowdownConnection(object):
         if not 'assertion' in challRequest.keys():
             logging.error("Login failed. Challenge response: %s", challRequest)
             raise LoginException(challRequest)
-        self.queueCommand("/trn " + self.username +
+        self.sendCommand("/trn " + self.username +
                          ",0," + challRequest['assertion'])
         self.loggedIn = True
         logging.info("Successfully logged in as %s", self.username)
@@ -825,7 +813,7 @@ class ShowdownConnection(object):
                                 "Battle %s ended. Winner: %s", roomId, winner)
                             logging.info("Final reward: %s", reward)
 
-                            self.queueCommand("/leave", roomId)
+                            self.sendCommand("/leave", roomId)
                             if roomId in self._currentBattles:
                                 del self._currentBattles[roomId]
                     elif command == "error":
@@ -834,7 +822,7 @@ class ShowdownConnection(object):
                             error_msg = lineSplit[1]
                             logging.error("Invalid choice error: %s", error_msg)
                             # Send undo command
-                            self.queueCommand("/undo", roomId)
+                            self.sendCommand("/undo", roomId)
                             # Get the current request
                             current_request = self._currentBattles[roomId].last_request
                             if current_request:
@@ -872,7 +860,7 @@ class ShowdownConnection(object):
 
         # Log the command being sent
         logging.info("Executing command after adjustment: %s", command)
-        self.queueCommand(command, request['room'])
+        self.sendCommand(command, request['room'])
 
     def handleNotImplemented(self, args):
         capture = False
@@ -896,8 +884,8 @@ class ShowdownConnection(object):
     def sendChallenge(self, player, format, team=None):
         if team == None:
             team = "null"
-        self.queueCommand("/utm " + team)
-        self.queueCommand("/challenge " + player + ", " + format)
+        self.sendCommand("/utm " + team)
+        self.sendCommand("/challenge " + player + ", " + format)
         logging.info("Sent challenge to player: %s", player)
 
     def decideAction(self, reqObject, roomName, battle: ShowdownBattle = None):
@@ -956,7 +944,7 @@ class ShowdownConnection(object):
 
         # Log the command being sent
         logging.info("Executing command: %s", command)
-        self.queueCommand(command, room_id=roomName)
+        self.sendCommand(command, room_id=roomName)
 
     def type_to_index(self, type_str):
         type_map = {
@@ -1123,15 +1111,14 @@ class ShowdownConnection(object):
             if model != None:
                 self.agent.model = model
             self.loginToServer()
-            self.recvThread.start()
-            self.sendThread.start()
+            self.webSocketThread.start()
             logging.info(
                 "Started ShowdownConnection. Username: %s", self.username)
 
     def Stop(self):
         if self.loggedIn:
             self._exit = True
-            self.recvThread.join()
+            self.webSocketThread.join()
             logging.info(
                 "Stopped ShowdownConnection. Username: %s", self.username)
 
