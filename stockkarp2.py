@@ -1,5 +1,6 @@
 import os
 import logging
+import queue
 from random import choice, randint, shuffle
 import time
 from websocket import WebSocket, WebSocketTimeoutException
@@ -8,6 +9,7 @@ import requests
 import json
 import re
 from dqn import *
+from bs4 import BeautifulSoup
 
 # Initialize logger
 logging.basicConfig(
@@ -146,7 +148,8 @@ class ShowdownPokemon:
 class ShowdownBattle(object):
     """ Showdown battle context """
 
-    def __init__(self):
+    def __init__(self, connection):
+        self._connection : ShowdownConnection = connection
         self._roomId = 0
         self._roomName = ""
         self._format = ""
@@ -164,6 +167,7 @@ class ShowdownBattle(object):
         self.last_state : list[int] | None = None
         self.last_action = 0
         self.last_valid_actions = list[bool] | None 
+        self.last_request = None
 
     def update_player_side(self, side_data):
         for pokemon_data in side_data['pokemon']:
@@ -173,6 +177,7 @@ class ShowdownBattle(object):
                 existing_pokemon.update_from_data(pokemon_data)
             else:
                 new_pokemon = ShowdownPokemon(pokemon_data=pokemon_data)
+                self._connection.queueCommand(f"/details {new_pokemon.species}")
                 self._playerSide.append(new_pokemon)
                 if new_pokemon.is_active:
                     self._activePlayerPokemon = new_pokemon
@@ -206,8 +211,10 @@ class ShowdownConnection(object):
     def __init__(self, username, password, useTeams=None, timeout=1):
         self.webSocket = WebSocket()
         self.webSocket.settimeout(CONFIG["websocket"]["timeout"])
-        self.webSocketThread = threading.Thread(
+        self.recvThread = threading.Thread(
             target=self.loopRecv, name="loopThread", args=(), daemon=True)
+        self.sendThread = threading.Thread(
+            target=self.loopCommand, name="commandThread", args=(), daemon=True)
         self.username = username
         self.password = password
         self.loggedIn = False
@@ -221,6 +228,7 @@ class ShowdownConnection(object):
             "pm": self.handlePm,
             ">": self.handleRoomUpdate
         }
+        self._commandQueue = queue.Queue()
         if useTeams == None:
             self.useTeams = {}
         else:
@@ -232,7 +240,7 @@ class ShowdownConnection(object):
         logging.info(
             "Initialized ShowdownConnection for username: %s", username)
 
-    def _get_state_vector(self, reqObject) -> list[int]:
+    def _get_state_vector(self, reqObject, battle=None) -> list[int]:
         """Convert battle state to numerical vector"""
         # Find active Pokémon from side data
         active_pokemon = None
@@ -297,6 +305,29 @@ class ShowdownConnection(object):
         # Combine all features
         return [hp_ratio, status_idx] + move_available + team_hp
 
+
+    def _get_pokemon_features(self, pokemon : ShowdownPokemon, is_opponent=False) -> list[float]:
+        features = []
+        
+        # Type IDs (Convert to numerical values)
+        type_id = self.type_to_index(pokemon['type'])
+        features.append(type_id)
+        
+        # Move IDs (Hash move IDs)
+        for move in pokemon['moves'][:4]:
+            move_id = self._get_move_id_hash(move['id'])
+            features.append(move_id)
+        
+        # Current and Max HP
+        hp_ratio = pokemon['condition']['curr'] / pokemon['condition']['max']
+        features.append(hp_ratio)
+        
+        # Status Condition (Convert to numerical value)
+        status_id = self._get_condition_index(pokemon['condition']['status'])
+        features.append(status_id)
+        
+        return features
+
     def _get_valid_actions_mask(self, reqObject):
         """Create mask of valid actions (moves + switches)"""
         # Initialize with all actions invalid
@@ -326,14 +357,15 @@ class ShowdownConnection(object):
             self.webSocket.connect(url)
             logging.info("Connected to server: %s", url)
 
-    def sendCommand(self, command, room_id=None):
+    def queueCommand(self, command, room_id=None):
         """ Sends the given command, starting with "/", to the given room, or global if not specified. """
         if room_id == None:
             room_id = ""
         # in case i forget to add a slash
         if command[0] != "/":
             command = "/" + command
-        self.webSocket.send(room_id + "|" + command)
+        # self.webSocket.send(room_id + "|" + command)
+        self._commandQueue.put(command)
         logging.info("Sent command to server: %s", command)
 
     def loopRecv(self):
@@ -350,6 +382,13 @@ class ShowdownConnection(object):
                             break
             time.sleep(CONFIG["loopSleep"])
 
+    def loopCommand(self):
+        while not self._exit:
+            cmdQ = self._commandQueue
+            cmd = cmdQ.get()
+            self.webSocket.send(cmd)
+            time.sleep(CONFIG["loopSleep"])
+
     def handleRequest(self, args, roomid):
         capture = True
         req_object = json.loads(args[1])
@@ -357,6 +396,7 @@ class ShowdownConnection(object):
             logging.info("Handling request for battle: %s", roomid)
             battle = self._currentBattles.get(roomid)
             if battle:
+                battle.last_request = req_object
                 if 'side' in req_object:
                     battle.update_player_side(req_object['side'])
                 if 'active' in req_object:
@@ -364,7 +404,7 @@ class ShowdownConnection(object):
                 if 'opposingSide' in req_object:
                     battle.update_opposing_side(req_object['opposingSide'])
                 self.decideAction(reqObject=json.loads(
-                    args[1]), roomName=roomid)
+                    args[1]), roomName=roomid, battle=battle)
         return capture
 
     def handleTurnEvents(self, lines, roomid):
@@ -408,6 +448,17 @@ class ShowdownConnection(object):
                         newPoke = ShowdownPokemon()
                         newPoke.ident = pokemon_name
                         newPoke.details = details
+                        match = re.match(r'^(.+?)(?:,\s*L(\d+))?(?:,\s*([MF]))?$', details)
+                        if match:
+                            newPoke.species = match.group(1).strip()
+                            newPoke.level = int(match.group(2)) if match.group(2) else 100
+                            newPoke.gender = match.group(3) if match.group(3) else '-'
+                        else:
+                            # If the format is not recognized, default to the full details string as species
+                            newPoke.species = details
+                            newPoke.level = 100
+                            newPoke.gender = '-'
+                        self.queueCommand(f"/details {newPoke.species}")
                         newPoke.hp_percentage = float(currHp) / float(maxHp)
                         battle._activeOpponentPokemon = newPoke
                         battle._opposingSide.append(newPoke)
@@ -529,26 +580,150 @@ class ShowdownConnection(object):
 
         return capture
 
+    def parse_raw_data(self, html_content, battle: ShowdownBattle):
+        """Parse raw HTML content and update the battle state."""
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Determine if it's a move or pokemon details
+        if soup.find("span", class_="col movenamecol"):
+            # Check for move details
+            move_details = self.parse_move_details(html_content)
+            if move_details:
+                # Update the move in the battle
+                self._update_battle_moves(battle, move_details)
+                return move_details
+        elif soup.find("span", "col pokemonnamecol"):
+            # Otherwise, treat as pokemon details
+            pokemon_details = self.parse_pokemon_details(html_content)
+            if pokemon_details:
+                self._update_battle_pokemon(battle, pokemon_details)
+                return pokemon_details
+        return None
+
+    def _update_battle_moves(self, battle: ShowdownBattle, move_details):
+        """Update the battle with the new move information."""
+        # Find the pokemon that could have this move
+        for pokemon in battle._playerSide:
+            if any(move['id'] == move_details['name'].lower() for move in pokemon.moves):
+                # Update the move details
+                for move in pokemon.moves:
+                    if move['id'] == move_details['name'].lower():
+                        move['type'] = move_details['type']
+                        move['category'] = move_details['category']
+                        move['power'] = move_details['power']
+                        move['accuracy'] = move_details['accuracy']
+                        move['pp'] = move_details['pp']
+                        move['description'] = move_details['description']
+                        # Add additional details if available
+                        if 'Priority' in move_details:
+                            move['priority'] = int(move_details['Priority'])
+                        if 'Z-Power' in move_details:
+                            move['zPower'] = int(move_details['Z-Power'])
+                        if 'Target' in move_details:
+                            move['target'] = move_details['Target']
+                        break
+        # Update opponent's moves if necessary
+        for pokemon in battle._opposingSide:
+            if any(move['id'] == move_details['name'] for move in pokemon.moves):
+                # Update the move details (opponent's moves are not tracked, so just update the first matching move)
+                for move in pokemon.moves:
+                    if move['id'] == move_details['name']:
+                        move['type'] = move_details['type']
+                        move['category'] = move_details['category']
+                        move['power'] = move_details['power']
+                        move['accuracy'] = move_details['accuracy']
+                        move['pp'] = move_details['pp']
+                        move['description'] = move_details['description']
+                        if 'Priority' in move_details:
+                            move['priority'] = int(move_details['Priority'])
+                        if 'Z-Power' in move_details:
+                            move['zPower'] = int(move_details['Z-Power'])
+                        if 'Target' in move_details:
+                            move['target'] = move_details['Target']
+                        break
+
+    def _update_battle_pokemon(self, battle: ShowdownBattle, new_details_obj):
+        """Update the battle with the new pokemon information."""
+        # Update player's pokemon
+        for pokemon in battle._playerSide:
+            if pokemon.species.lower() == new_details_obj['name'].lower():
+                # Update base stats
+                if 'base_stats' in new_details_obj:
+                    pokemon.stats = new_details_obj['base_stats']
+                # Update types
+                if 'types' in new_details_obj:
+                    pokemon.type = new_details_obj['types'][0]
+                    if len(new_details_obj['types']) > 1:
+                        pokemon.secondary_type = new_details_obj['types'][1]
+                # Update abilities
+                if 'abilities' in new_details_obj:
+                    pokemon.ability = new_details_obj['abilities'][0]
+                    if len(new_details_obj['abilities']) > 1:
+                        pokemon.secondary_ability = new_details_obj['abilities'][1]
+                # Update BST
+                if 'bst' in new_details_obj:
+                    pokemon.base_stats['bst'] = new_details_obj['bst']
+                # Update additional details
+                if 'Dex Colour' in new_details_obj:
+                    pokemon.dex_colour = new_details_obj['Dex Colour']
+                if 'Egg Group(s)' in new_details_obj:
+                    pokemon.egg_groups = new_details_obj['Egg Group(s)'].split(', ')
+                if 'Evolution' in new_details_obj:
+                    pokemon.evolution = new_details_obj['Evolution']
+
+        # Update opponent's pokemon
+        for pokemon in battle._opposingSide:
+            if pokemon.species.lower() == new_details_obj['name'].lower():
+                # Update base stats
+                if 'base_stats' in new_details_obj:
+                    pokemon.stats = new_details_obj['base_stats']
+                # Update types
+                if 'types' in new_details_obj:
+                    pokemon.type = new_details_obj['types'][0]
+                    if len(new_details_obj['types']) > 1:
+                        pokemon.secondary_type = new_details_obj['types'][1]
+                # Update abilities
+                if 'abilities' in new_details_obj:
+                    pokemon.ability = new_details_obj['abilities'][0]
+                    if len(new_details_obj['abilities']) > 1:
+                        pokemon.secondary_ability = new_details_obj['abilities'][1]
+                # Update BST
+                if 'bst' in new_details_obj:
+                    pokemon.base_stats['bst'] = new_details_obj['bst']
+                # Update additional details
+                if 'Dex Colour' in new_details_obj:
+                    pokemon.dex_colour = new_details_obj['Dex Colour']
+                if 'Egg Group(s)' in new_details_obj:
+                    pokemon.egg_groups = new_details_obj['Egg Group(s)'].split(', ')
+                if 'Evolution' in new_details_obj:
+                    pokemon.evolution = new_details_obj['Evolution']
+
     def handlePm(self, args):
         capture = True
         pmFrom = args[1][1:]
         pmTo = args[2][1:]
         message = args[3]
         messageSplit = message.split()
-        if pmTo == self.username and pmFrom != self.username and messageSplit[0].startswith('/'):
-            logging.info("Received PM command from %s: %s", pmFrom, message)
-            command = messageSplit[0][1:]
-            if command == "log":
-                pass
-            elif command == "challenge":
-                battleFormat = message.split()[1]
-                useTeam = self.useTeams[messageSplit[1]
-                                        ] if messageSplit[1] in self.useTeams else "null"
-                if useTeam == None:
-                    useTeam = "null"
-                self.sendCommand("/utm " + useTeam)
-                self.sendCommand("/accept " + pmFrom)
-                logging.info("Accepted challenge from %s", pmFrom)
+        logging.info("Received PM command from %s: %s", pmFrom, message)
+        command = messageSplit[0][1:]
+        if command == "log":
+            pass
+        elif command == "challenge" and pmTo == self.username and pmFrom != self.username and messageSplit[0].startswith('/'):
+            battleFormat = message.split()[1]
+            useTeam = self.useTeams[messageSplit[1]] if messageSplit[1] in self.useTeams else "null"
+            if useTeam == None:
+                useTeam = "null"
+            self.queueCommand("/utm " + useTeam)
+            self.queueCommand("/accept " + pmFrom)
+            logging.info("Accepted challenge from %s", pmFrom)
+        elif command == "raw":
+            # Parse the raw data and update the current battle
+            html_content = ' '.join(messageSplit[1:])
+            for battleId, battle in self._currentBattles.items():
+                # Update the battle with the new data
+                parsed_data = self.parse_raw_data(html_content, battle)
+                if parsed_data:
+                    logging.info("Updated battle data for %s: %s", battleId, parsed_data)
         return capture
 
     def handleChallStr(self, args):
@@ -563,7 +738,7 @@ class ShowdownConnection(object):
         if not 'assertion' in challRequest.keys():
             logging.error("Login failed. Challenge response: %s", challRequest)
             raise LoginException(challRequest)
-        self.sendCommand("/trn " + self.username +
+        self.queueCommand("/trn " + self.username +
                          ",0," + challRequest['assertion'])
         self.loggedIn = True
         logging.info("Successfully logged in as %s", self.username)
@@ -576,7 +751,7 @@ class ShowdownConnection(object):
             for i in searchjson["games"]:
                 if not i in self._currentBattles:
                     isplit = i.split("-")
-                    newGame = ShowdownBattle()
+                    newGame = ShowdownBattle(self)
                     newGame._format = isplit[1]
                     newGame._roomId = int(isplit[2])
                     newGame._roomName = i
@@ -650,10 +825,54 @@ class ShowdownConnection(object):
                                 "Battle %s ended. Winner: %s", roomId, winner)
                             logging.info("Final reward: %s", reward)
 
-                            self.sendCommand("/leave", roomId)
+                            self.queueCommand("/leave", roomId)
                             if roomId in self._currentBattles:
                                 del self._currentBattles[roomId]
+                    elif command == "error":
+                        # Handle invalid choices
+                        if "Invalid choice" in lineSplit[1]:
+                            error_msg = lineSplit[1]
+                            logging.error("Invalid choice error: %s", error_msg)
+                            # Send undo command
+                            self.queueCommand("/undo", roomId)
+                            # Get the current request
+                            current_request = self._currentBattles[roomId].last_request
+                            if current_request:
+                                # Adjust the decision-making process
+                                self.adjustDecisionForTrappedPokemon(current_request)
         return capture
+
+    def adjustDecisionForTrappedPokemon(self, request):
+        """
+        Adjust the decision-making process when the active Pokémon is trapped.
+        """
+        # Get the current state and valid actions
+        state = self._get_state_vector(request)
+        valid_actions = self._get_valid_actions_mask(request)
+
+        # Remove switching options if the Pokémon is trapped
+        if any("trapped" in move.get('disabledReason', '') for move in request['active'][0]['moves']):
+            # Only allow move actions
+            valid_actions = [True] * 4 + [False] * 5
+
+        # Let the DQN agent choose a valid action
+        action_idx = self.agent.act(state, valid_actions)
+
+        # Store for next step
+        request.battle.last_state = state
+        request.battle.last_action = action_idx
+        request.battle.last_valid_actions = valid_actions
+
+        # Execute the action
+        if action_idx < 4:  # Move
+            move_id = request['active'][0]['moves'][action_idx]['id']
+            command = f"move {move_id}"
+        else:  # Switch (should be disabled in this case)
+            command = "pass"  # or choose a default move
+
+        # Log the command being sent
+        logging.info("Executing command after adjustment: %s", command)
+        self.queueCommand(command, request['room'])
 
     def handleNotImplemented(self, args):
         capture = False
@@ -677,12 +896,11 @@ class ShowdownConnection(object):
     def sendChallenge(self, player, format, team=None):
         if team == None:
             team = "null"
-        self.sendCommand("/utm " + team)
-        self.sendCommand("/challenge " + player + ", " + format)
+        self.queueCommand("/utm " + team)
+        self.queueCommand("/challenge " + player + ", " + format)
         logging.info("Sent challenge to player: %s", player)
 
-    def decideAction(self, reqObject, roomName):
-        battle = self._currentBattles.get(roomName)
+    def decideAction(self, reqObject, roomName, battle: ShowdownBattle = None):
         if not battle:
             return
 
@@ -703,7 +921,7 @@ class ShowdownConnection(object):
             logging.info("Next state: %s", next_state)
 
         # Get current state and valid actions
-        state = self._get_state_vector(reqObject)
+        state = self._get_state_vector(reqObject, battle=battle)
         valid_actions = self._get_valid_actions_mask(reqObject)
 
         # Log the current state and valid actions
@@ -738,7 +956,7 @@ class ShowdownConnection(object):
 
         # Log the command being sent
         logging.info("Executing command: %s", command)
-        self.sendCommand(command, room_id=roomName)
+        self.queueCommand(command, room_id=roomName)
 
     def type_to_index(self, type_str):
         type_map = {
@@ -775,20 +993,145 @@ class ShowdownConnection(object):
         # Simple hash function for move IDs
         return abs(hash(move_id)) % (2 ** 32)
 
+    def parse_move_details(self, html_content):
+        move_details = {}
+        
+        # Parse the HTML content
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Extract move name
+        movename_tag = soup.find('span', class_='col movenamecol')
+        if movename_tag:
+            move_details['name'] = movename_tag.find('a').text.strip()
+        
+        # Extract type and category
+        typecol_tag = soup.find('span', class_='col typecol')
+        if typecol_tag:
+            imgs = typecol_tag.find_all('img')
+            move_details['type'] = imgs[0]['alt']
+            move_details['category'] = imgs[1]['alt']
+        
+        # Extract power
+        power_tag = soup.find('span', class_='col labelcol')
+        if power_tag:
+            move_details['power'] = int(power_tag.find('br').next_sibling.strip())
+        
+        # Extract accuracy
+        accuracy_tag = soup.find('span', class_='col widelabelcol')
+        if accuracy_tag:
+            accuracy = accuracy_tag.find('br').next_sibling.strip().replace('%', '')
+            move_details['accuracy'] = int(accuracy)
+        
+        # Extract PP
+        pp_tag = soup.find('span', class_='col pplabelcol')
+        if pp_tag:
+            move_details['pp'] = int(pp_tag.find('br').next_sibling.strip())
+        
+        # Extract description
+        desc_tag = soup.find('span', class_='col movedesccol')
+        if desc_tag:
+            move_details['description'] = desc_tag.text.strip()
+        
+        # Extract additional details from font tag
+        font_tag = soup.find('font', size="1")
+        if font_tag:
+            parts = font_tag.text.split('&ThickSpace;')
+            for part in parts:
+                if not part:
+                    continue
+                key_value = part.strip().split(': ')
+                if len(key_value) == 2:
+                    key, value = key_value
+                    move_details[key.strip()] = value.strip()
+        
+        return move_details
+
+
+    def parse_pokemon_details(self, html_content):
+        pokemon_details = {}
+        
+        # Parse the HTML content
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Extract main details from utilichart
+        utilichart = soup.find('ul', class_='utilichart')
+        if utilichart:
+            # Extract Pokemon name
+            name_tag = utilichart.find('span', class_='col pokemonnamecol')
+            if name_tag:
+                pokemon_details['name'] = name_tag.find('a').text.strip()
+            
+            # Extract types
+            type_tag = utilichart.find('span', class_='col typecol')
+            if type_tag:
+                type_imgs = type_tag.find_all('img')
+                pokemon_details['types'] = [img['alt'] for img in type_imgs]
+            
+            # Extract abilities
+            abilities = []
+            ability_one = utilichart.find_all('span', class_='col abilitycol')
+            ability_two = utilichart.find_all('span', class_='col twoabilitycol')
+            if ability_one:
+                abilities += [tag.text.strip() for tag in ability_one if len(tag.text.strip()) > 0]
+            if ability_two:
+                for i in ability_two:
+                    if len(i.contents) > 2:
+                        abilities += [i.contents[0], i.contents[2]]
+            pokemon_details['abilities'] = abilities
+            
+            # Extract base stats
+            stat_tags = utilichart.find_all('span', class_='col statcol')
+            if stat_tags:
+                stats = {}
+                for tag in stat_tags:
+                    text = tag.text
+                    stat_name = ''.join([x.lower() for x in text if x.isalpha()])
+                    stat_val = int(''.join([x.lower() for x in text if x.isdecimal()]))
+                    stats[stat_name] = stat_val
+                pokemon_details['base_stats'] = stats
+            
+            # Extract BST
+            bst_tag = utilichart.find('span', class_='col bstcol')
+            if bst_tag:
+                bst = bst_tag.find('em').text.replace('BST', '').strip()
+                pokemon_details['bst'] = int(bst) if bst.isdigit() else bst
+        
+        # Extract additional details from font tag
+        font_tag = soup.find('font', size="1")
+        if font_tag:
+            parts = font_tag.text.split('&ThickSpace;')
+            for part in parts:
+                if not part:
+                    continue
+                key_value = part.strip().split(': ')
+                if len(key_value) == 2:
+                    key, value = key_value
+                    # Handle special cases
+                    if key == 'Evolution':
+                        evolution = value.strip()
+                        if evolution.endswith(')'):
+                            evolution = evolution.rsplit('(', 1)[0].strip()
+                        pokemon_details[key] = evolution
+                    else:
+                        pokemon_details[key.strip()] = value.strip()
+        
+        return pokemon_details
+
     def Start(self, model=None):
         logging.info("%s \nStarting Stockkarp.", ("=" * 100))
         if not self.loggedIn:
             if model != None:
                 self.agent.model = model
             self.loginToServer()
-            self.webSocketThread.start()
+            self.recvThread.start()
+            self.sendThread.start()
             logging.info(
                 "Started ShowdownConnection. Username: %s", self.username)
 
     def Stop(self):
         if self.loggedIn:
             self._exit = True
-            self.webSocketThread.join()
+            self.recvThread.join()
             logging.info(
                 "Stopped ShowdownConnection. Username: %s", self.username)
 
