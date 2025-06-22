@@ -691,6 +691,7 @@ class ShowdownConnection(object):
                             move["power"] = 0
                         move['accuracy'] = move_details['accuracy']
                         move['pp'] = move_details['pp']
+                        move["maxpp"] = move_details["pp"]
                         move['description'] = move_details['description']
                         if 'Priority' in move_details:
                             move['priority'] = int(move_details['Priority'])
