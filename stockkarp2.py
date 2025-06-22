@@ -12,7 +12,8 @@ from bs4 import BeautifulSoup
 
 # Initialize logger
 logging.basicConfig(
-    filename=f"training-{time.ctime(time.time())}.log".replace(" ", "").replace(":", ""),
+    filename=f"training-{time.ctime(time.time())}.log".replace(" ",
+                                                               "").replace(":", ""),
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
@@ -148,7 +149,7 @@ class ShowdownBattle(object):
     """ Showdown battle context """
 
     def __init__(self, connection):
-        self._connection : ShowdownConnection = connection
+        self._connection: ShowdownConnection = connection
         self._roomId = 0
         self._roomName = ""
         self._format = ""
@@ -163,9 +164,9 @@ class ShowdownBattle(object):
         self._activePlayerPokemon: ShowdownPokemon = None
         # Currently active Pokémon of the opponent
         self._activeOpponentPokemon: ShowdownPokemon = None
-        self.last_state : list[int] | None = None
+        self.last_state: list[int] | None = None
         self.last_action = 0
-        self.last_valid_actions = list[bool] | None 
+        self.last_valid_actions = list[bool] | None
         self.last_request = None
 
     def update_player_side(self, side_data):
@@ -301,27 +302,26 @@ class ShowdownConnection(object):
         # Combine all features
         return [hp_ratio, status_idx] + move_available + team_hp
 
-
-    def _get_pokemon_features(self, pokemon : ShowdownPokemon, is_opponent=False) -> list[float]:
+    def _get_pokemon_features(self, pokemon: ShowdownPokemon, is_opponent=False) -> list[float]:
         features = []
-        
+
         # Type IDs (Convert to numerical values)
         type_id = self.type_to_index(pokemon['type'])
         features.append(type_id)
-        
+
         # Move IDs (Hash move IDs)
         for move in pokemon['moves'][:4]:
             move_id = self._get_move_id_hash(move['id'])
             features.append(move_id)
-        
+
         # Current and Max HP
         hp_ratio = pokemon['condition']['curr'] / pokemon['condition']['max']
         features.append(hp_ratio)
-        
+
         # Status Condition (Convert to numerical value)
         status_id = self._get_condition_index(pokemon['condition']['status'])
         features.append(status_id)
-        
+
         return features
 
     def _get_valid_actions_mask(self, reqObject):
@@ -407,21 +407,28 @@ class ShowdownConnection(object):
                 event = linesplit[0]
                 if event == "detailschange":
                     parts = linesplit
-                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
+                    pokemon_name = parts[1].replace(
+                        "p1a", "p1").replace("p2a", "p2")
                     details = parts[2]
-                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
-                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith(
+                        "p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next(
+                        (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
                         pokemon.details = details
                 if event == "switch":
                     # TODO reset stat stages on switch
                     parts = linesplit
-                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
+                    pokemon_name = parts[1].replace(
+                        "p1a", "p1").replace("p2a", "p2")
                     details = parts[2]
-                    hp_ratio = ''.join([x for x in parts[3] if x.isnumeric() or x == "/"])
+                    hp_ratio = ''.join(
+                        [x for x in parts[3] if x.isnumeric() or x == "/"])
                     currHp, maxHp = tuple(hp_ratio.split("/"))
-                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
-                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith(
+                        "p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next(
+                        (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
                         if targetSide == battle._playerSide:
                             battle._activePlayerPokemon = pokemon
@@ -429,18 +436,21 @@ class ShowdownConnection(object):
                             battle._activeOpponentPokemon = pokemon
                         pokemon.hp_percentage = float(currHp) / float(maxHp)
                         pokemon.statBoosts = {"atk": 6, "def": 6, "spa": 6,
-                           "spd": 6, "spe": 6}
+                                              "spd": 6, "spe": 6}
                     # we don't *really* care about updating the player's active pokemon here since the request will do it anyway
                     # but we do need to have something in the active opponent side for decision making
                     elif targetSide == battle._opposingSide:
                         newPoke = ShowdownPokemon()
                         newPoke.ident = pokemon_name
                         newPoke.details = details
-                        match = re.match(r'^(.+?)(?:,\s*L(\d+))?(?:,\s*([MF]))?$', details)
+                        match = re.match(
+                            r'^(.+?)(?:,\s*L(\d+))?(?:,\s*([MF]))?$', details)
                         if match:
                             newPoke.species = match.group(1).strip()
-                            newPoke.level = int(match.group(2)) if match.group(2) else 100
-                            newPoke.gender = match.group(3) if match.group(3) else '-'
+                            newPoke.level = int(match.group(
+                                2)) if match.group(2) else 100
+                            newPoke.gender = match.group(
+                                3) if match.group(3) else '-'
                         else:
                             # If the format is not recognized, default to the full details string as species
                             newPoke.species = details
@@ -454,79 +464,107 @@ class ShowdownConnection(object):
                 elif event == "move":
                     # TODO pp drain and move targeting type discovery (not super relevant for singles but might indicate a boosting move)
                     parts = linesplit
-                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
+                    pokemon_name = parts[1].replace(
+                        "p1a", "p1").replace("p2a", "p2")
                     moveid = parts[2].lower().replace(" ", "").replace("-", "")
-                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
-                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith(
+                        "p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next(
+                        (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
                         if targetSide == battle._opposingSide:
-                            unknownmoves = [x for x in pokemon.moves if x["id"] == VALUE_UNKNOWN]
-                            knownmoveids = [x["id"] for x in pokemon.moves if x["id"] != VALUE_UNKNOWN]
+                            unknownmoves = [
+                                x for x in pokemon.moves if x["id"] == VALUE_UNKNOWN]
+                            knownmoveids = [
+                                x["id"] for x in pokemon.moves if x["id"] != VALUE_UNKNOWN]
                             if len(unknownmoves) > 0 and not moveid in knownmoveids:
                                 unknownmoves[0]["id"] = moveid
                                 unknownmoves[0]["move"] = parts[2]
                 elif event == "-damage":
                     # Handle damage events
                     parts = linesplit
-                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
-                    damage_details = ''.join([x for x in parts[2] if x.isnumeric() or x == "/"])    # we don't care about status for damage
-                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
-                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    pokemon_name = parts[1].replace(
+                        "p1a", "p1").replace("p2a", "p2")
+                    # we don't care about status for damage
+                    damage_details = ''.join(
+                        [x for x in parts[2] if x.isnumeric() or x == "/"])
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith(
+                        "p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next(
+                        (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
                         if damage_details == "0":
                             pokemon.hp_percentage = 0
                             pokemon.is_active = False
                         else:
                             currHp, maxHp = tuple(damage_details.split("/"))
-                            pokemon.hp_percentage = float(currHp) / float(maxHp)
+                            pokemon.hp_percentage = float(
+                                currHp) / float(maxHp)
                 elif event == "-heal":
                     # Handle healing events
                     parts = linesplit
-                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
-                    heal_amount = ''.join([x for x in parts[2] if x.isnumeric() or x == "/"])
-                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
-                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    pokemon_name = parts[1].replace(
+                        "p1a", "p1").replace("p2a", "p2")
+                    heal_amount = ''.join(
+                        [x for x in parts[2] if x.isnumeric() or x == "/"])
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith(
+                        "p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next(
+                        (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
                         currHp, maxHp = tuple(heal_amount.split("/"))
                         pokemon.hp_percentage = float(currHp) / float(maxHp)
                 elif event == "-status":
                     # Handle status conditions (e.g., burn, poison)
                     parts = linesplit
-                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
+                    pokemon_name = parts[1].replace(
+                        "p1a", "p1").replace("p2a", "p2")
                     status = parts[2]
-                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
-                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith(
+                        "p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next(
+                        (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
                         pokemon.statusCondition = status
                 elif event == "faint":
                     # Handle fainting Pokémon
                     parts = linesplit
-                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
-                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
-                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    pokemon_name = parts[1].replace(
+                        "p1a", "p1").replace("p2a", "p2")
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith(
+                        "p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next(
+                        (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
                         pokemon.hp_percentage = 0
                         pokemon.is_active = False
                 elif event == "-boost":
                     # Handle stat boosts
                     parts = linesplit
-                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
+                    pokemon_name = parts[1].replace(
+                        "p1a", "p1").replace("p2a", "p2")
                     stat = parts[2]
                     boost = parts[3]
-                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
-                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith(
+                        "p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next(
+                        (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
                         current_boost = pokemon.statBoosts[stat]
-                        stat_boost = {stat: min(12, current_boost + int(boost))}
+                        stat_boost = {
+                            stat: min(12, current_boost + int(boost))}
                         pokemon.statBoosts.update(stat_boost)
                 elif event == "-unboost":
                     # Handle stat unbboosts
                     parts = linesplit
-                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
+                    pokemon_name = parts[1].replace(
+                        "p1a", "p1").replace("p2a", "p2")
                     stat = parts[2]
                     boost = parts[3]
-                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
-                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith(
+                        "p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next(
+                        (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
                         current_boost = pokemon.statBoosts[stat]
                         stat_boost = {stat: max(0, current_boost - int(boost))}
@@ -534,19 +572,26 @@ class ShowdownConnection(object):
                 elif event == "-ability":
                     # |-ability|p1a: Dialga|Pressure
                     parts = linesplit
-                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
-                    abilityname = parts[2].lower().replace(" ", "").replace("-", "")
-                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
-                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    pokemon_name = parts[1].replace(
+                        "p1a", "p1").replace("p2a", "p2")
+                    abilityname = parts[2].lower().replace(
+                        " ", "").replace("-", "")
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith(
+                        "p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next(
+                        (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
                         pokemon.ability = abilityname
                 elif event == "-item":
                     # |-item|p1a: Gurdurr|Choice Specs|[from] move: Trick
                     parts = linesplit
-                    pokemon_name = parts[1].replace("p1a", "p1").replace("p2a", "p2")
+                    pokemon_name = parts[1].replace(
+                        "p1a", "p1").replace("p2a", "p2")
                     item = parts[2].lower().replace(" ", "").replace("-", "")
-                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith("p2") and battle._playerNumber == 2) else battle._opposingSide
-                    pokemon = next((p for p in targetSide if p.ident == pokemon_name), None)
+                    targetSide = battle._playerSide if (pokemon_name.startswith("p1") and battle._playerNumber == 1 or pokemon_name.startswith(
+                        "p2") and battle._playerNumber == 2) else battle._opposingSide
+                    pokemon = next(
+                        (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
                         pokemon.item = item
                 elif event == "-fail":
@@ -565,13 +610,12 @@ class ShowdownConnection(object):
                     # TODO more battle state shit
                     pass
 
-
         return capture
 
     def parse_raw_data(self, html_content, battle: ShowdownBattle):
         """Parse raw HTML content and update the battle state."""
         soup = BeautifulSoup(html_content, 'html.parser')
-        
+
         # Determine if it's a move or pokemon details
         if soup.find("span", class_="col movenamecol"):
             # Check for move details
@@ -655,7 +699,8 @@ class ShowdownConnection(object):
                 if 'Dex Colour' in new_details_obj:
                     pokemon.dex_colour = new_details_obj['Dex Colour']
                 if 'Egg Group(s)' in new_details_obj:
-                    pokemon.egg_groups = new_details_obj['Egg Group(s)'].split(', ')
+                    pokemon.egg_groups = new_details_obj['Egg Group(s)'].split(
+                        ', ')
                 if 'Evolution' in new_details_obj:
                     pokemon.evolution = new_details_obj['Evolution']
 
@@ -677,12 +722,13 @@ class ShowdownConnection(object):
                         pokemon.secondary_ability = new_details_obj['abilities'][1]
                 # Update BST
                 if 'bst' in new_details_obj:
-                    pokemon.base_stats['bst'] = new_details_obj['bst']
+                    pokemon.base_stats = new_details_obj['bst']
                 # Update additional details
                 if 'Dex Colour' in new_details_obj:
                     pokemon.dex_colour = new_details_obj['Dex Colour']
                 if 'Egg Group(s)' in new_details_obj:
-                    pokemon.egg_groups = new_details_obj['Egg Group(s)'].split(', ')
+                    pokemon.egg_groups = new_details_obj['Egg Group(s)'].split(
+                        ', ')
                 if 'Evolution' in new_details_obj:
                     pokemon.evolution = new_details_obj['Evolution']
 
@@ -698,7 +744,8 @@ class ShowdownConnection(object):
             pass
         elif command == "challenge" and pmTo == self.username and pmFrom != self.username and messageSplit[0].startswith('/'):
             battleFormat = message.split()[1]
-            useTeam = self.useTeams[messageSplit[1]] if messageSplit[1] in self.useTeams else "null"
+            useTeam = self.useTeams[messageSplit[1]
+                                    ] if messageSplit[1] in self.useTeams else "null"
             if useTeam == None:
                 useTeam = "null"
             self.sendCommand("/utm " + useTeam)
@@ -711,7 +758,8 @@ class ShowdownConnection(object):
                 # Update the battle with the new data
                 parsed_data = self.parse_raw_data(html_content, battle)
                 if parsed_data:
-                    logging.info("Updated battle data for %s: %s", battleId, parsed_data)
+                    logging.info("Updated battle data for %s: %s",
+                                 battleId, parsed_data)
         return capture
 
     def handleChallStr(self, args):
@@ -820,14 +868,16 @@ class ShowdownConnection(object):
                         # Handle invalid choices
                         if "Invalid choice" in lineSplit[1]:
                             error_msg = lineSplit[1]
-                            logging.error("Invalid choice error: %s", error_msg)
+                            logging.error(
+                                "Invalid choice error: %s", error_msg)
                             # Send undo command
                             self.sendCommand("/undo", roomId)
                             # Get the current request
                             current_request = self._currentBattles[roomId].last_request
                             if current_request:
                                 # Adjust the decision-making process
-                                self.adjustDecisionForTrappedPokemon(current_request)
+                                self.adjustDecisionForTrappedPokemon(
+                                    current_request)
         return capture
 
     def adjustDecisionForTrappedPokemon(self, request):
@@ -983,43 +1033,45 @@ class ShowdownConnection(object):
 
     def parse_move_details(self, html_content):
         move_details = {}
-        
+
         # Parse the HTML content
         soup = BeautifulSoup(html_content, 'html.parser')
-        
+
         # Extract move name
         movename_tag = soup.find('span', class_='col movenamecol')
         if movename_tag:
             move_details['name'] = movename_tag.find('a').text.strip()
-        
+
         # Extract type and category
         typecol_tag = soup.find('span', class_='col typecol')
         if typecol_tag:
             imgs = typecol_tag.find_all('img')
             move_details['type'] = imgs[0]['alt']
             move_details['category'] = imgs[1]['alt']
-        
+
         # Extract power
         power_tag = soup.find('span', class_='col labelcol')
         if power_tag:
-            move_details['power'] = int(power_tag.find('br').next_sibling.strip())
-        
+            move_details['power'] = int(
+                power_tag.find('br').next_sibling.strip())
+
         # Extract accuracy
         accuracy_tag = soup.find('span', class_='col widelabelcol')
         if accuracy_tag:
-            accuracy = accuracy_tag.find('br').next_sibling.strip().replace('%', '')
+            accuracy = accuracy_tag.find(
+                'br').next_sibling.strip().replace('%', '')
             move_details['accuracy'] = int(accuracy)
-        
+
         # Extract PP
         pp_tag = soup.find('span', class_='col pplabelcol')
         if pp_tag:
             move_details['pp'] = int(pp_tag.find('br').next_sibling.strip())
-        
+
         # Extract description
         desc_tag = soup.find('span', class_='col movedesccol')
         if desc_tag:
             move_details['description'] = desc_tag.text.strip()
-        
+
         # Extract additional details from font tag
         font_tag = soup.find('font', size="1")
         if font_tag:
@@ -1031,16 +1083,15 @@ class ShowdownConnection(object):
                 if len(key_value) == 2:
                     key, value = key_value
                     move_details[key.strip()] = value.strip()
-        
-        return move_details
 
+        return move_details
 
     def parse_pokemon_details(self, html_content):
         pokemon_details = {}
-        
+
         # Parse the HTML content
         soup = BeautifulSoup(html_content, 'html.parser')
-        
+
         # Extract main details from utilichart
         utilichart = soup.find('ul', class_='utilichart')
         if utilichart:
@@ -1048,42 +1099,46 @@ class ShowdownConnection(object):
             name_tag = utilichart.find('span', class_='col pokemonnamecol')
             if name_tag:
                 pokemon_details['name'] = name_tag.find('a').text.strip()
-            
+
             # Extract types
             type_tag = utilichart.find('span', class_='col typecol')
             if type_tag:
                 type_imgs = type_tag.find_all('img')
                 pokemon_details['types'] = [img['alt'] for img in type_imgs]
-            
+
             # Extract abilities
             abilities = []
             ability_one = utilichart.find_all('span', class_='col abilitycol')
-            ability_two = utilichart.find_all('span', class_='col twoabilitycol')
+            ability_two = utilichart.find_all(
+                'span', class_='col twoabilitycol')
             if ability_one:
-                abilities += [tag.text.strip() for tag in ability_one if len(tag.text.strip()) > 0]
+                abilities += [tag.text.strip()
+                              for tag in ability_one if len(tag.text.strip()) > 0]
             if ability_two:
                 for i in ability_two:
                     if len(i.contents) > 2:
                         abilities += [i.contents[0], i.contents[2]]
             pokemon_details['abilities'] = abilities
-            
+
             # Extract base stats
             stat_tags = utilichart.find_all('span', class_='col statcol')
             if stat_tags:
                 stats = {}
                 for tag in stat_tags:
                     text = tag.text
-                    stat_name = ''.join([x.lower() for x in text if x.isalpha()])
-                    stat_val = int(''.join([x.lower() for x in text if x.isdecimal()]))
+                    stat_name = ''.join([x.lower()
+                                        for x in text if x.isalpha()])
+                    stat_val = int(''.join([x.lower()
+                                   for x in text if x.isdecimal()]))
                     stats[stat_name] = stat_val
                 pokemon_details['base_stats'] = stats
-            
+
             # Extract BST
             bst_tag = utilichart.find('span', class_='col bstcol')
             if bst_tag:
                 bst = bst_tag.find('em').text.replace('BST', '').strip()
                 pokemon_details['bst'] = int(bst) if bst.isdigit() else bst
-        
+
         # Extract additional details from font tag
         font_tag = soup.find('font', size="1")
         if font_tag:
@@ -1102,7 +1157,7 @@ class ShowdownConnection(object):
                         pokemon_details[key] = evolution
                     else:
                         pokemon_details[key.strip()] = value.strip()
-        
+
         return pokemon_details
 
     def Start(self, model=None):
