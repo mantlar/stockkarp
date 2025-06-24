@@ -277,131 +277,132 @@ class ShowdownBattle(object):
         return type_map.get(type_str, 0)
 
     def _get_state_vector(self, reqObject) -> list[float]:
+        # Initialize state sections
         state = []
-        display_state = {"active": {},
-                         "oppActive": {}, "side": [], "oppSide": []}
-        # Active Player Pokémon's HP and status
+        section_lengths = {}
+
+        # Section 1: Active Player Pokemon Information
         active_player = self._activePlayerPokemon
-        state.append(active_player.hp_percentage)
-        display_state["active"]["hp_percentage"] = active_player.hp_percentage
-        state.append(self._get_condition_index(
-            active_player.statusCondition if active_player.statusCondition else ''))
-        display_state["active"]["condition"] = active_player.statusCondition
-        state.append(self.type_to_index(active_player.type))
-        display_state["active"]["type"] = active_player.type
-        state.append(self.type_to_index(
-            active_player.type2 if active_player.type2 != None else ''))
-        display_state["active"]["type2"] = active_player.type2 if active_player.type2 != None else ''
-        # Active Opponent Pokémon's HP and status (if available)
+        if active_player:
+            section = [
+                active_player.hp_percentage,
+                active_player.stats["atk"],
+                active_player.stats["def"],
+                active_player.stats["spa"],
+                active_player.stats["spd"],
+                active_player.stats["spe"],
+                active_player.statBoosts["atk"],
+                active_player.statBoosts["def"],
+                active_player.statBoosts["spa"],
+                active_player.statBoosts["spd"],
+                active_player.statBoosts["spe"],
+                active_player.statBoosts["accuracy"],
+                active_player.statBoosts["evasion"],
+                self._connection._get_hash(active_player.ability) if active_player.ability != VALUE_UNKNOWN else VALUE_UNKNOWN,
+                self._connection._get_hash(active_player.item) if active_player.item != VALUE_UNKNOWN else VALUE_UNKNOWN,
+                self._get_condition_index(active_player.statusCondition if active_player.statusCondition else ''),
+                self.type_to_index(active_player.type),
+                self.type_to_index(active_player.type2 if active_player.type2 is not None else '')
+            ]
+        else:
+            section = [VALUE_UNKNOWN] * 18
+        state += section
+        section_lengths['player'] = len(section)
+        logging.info(f"Player Section Length: {section_lengths['player']}")
+
+        # Section 2: Active Opponent Pokemon Information
         active_opponent = self._activeOpponentPokemon
         if active_opponent:
-            state.append(active_opponent.hp_percentage)
-            display_state["oppActive"]["hp_percentage"] = active_opponent.hp_percentage
-            state.append(self._get_condition_index(
-                active_opponent.statusCondition if active_opponent.statusCondition else ''))
-            display_state["oppActive"]["condition"] = active_opponent.statusCondition
-            state.append(self.type_to_index(active_opponent.type))
-            display_state["oppActive"]["type"] = active_opponent.type
-            state.append(self.type_to_index(
-                active_opponent.type2 if active_opponent.type2 != None else ''))
-            display_state["oppActive"]["type2"] = active_opponent.type2 if active_opponent.type2 != None else ''
+            section = [
+                active_opponent.hp_percentage,
+                active_opponent.base_stats["atk"],
+                active_opponent.base_stats["def"],
+                active_opponent.base_stats["spa"],
+                active_opponent.base_stats["spd"],
+                active_opponent.base_stats["spe"],
+                active_opponent.statBoosts["atk"],
+                active_opponent.statBoosts["def"],
+                active_opponent.statBoosts["spa"],
+                active_opponent.statBoosts["spd"],
+                active_opponent.statBoosts["spe"],
+                active_opponent.statBoosts["accuracy"],
+                active_opponent.statBoosts["evasion"],
+                self._connection._get_hash(active_opponent.ability) if active_opponent.ability != VALUE_UNKNOWN else VALUE_UNKNOWN,
+                self._connection._get_hash(active_opponent.item) if active_opponent.item != VALUE_UNKNOWN else VALUE_UNKNOWN,
+                self._get_condition_index(active_opponent.statusCondition if active_opponent.statusCondition else ''),
+                self.type_to_index(active_opponent.type),
+                self.type_to_index(active_opponent.type2 if active_opponent.type2 is not None else '')
+            ]
         else:
-            # Use default values if opponent's active Pokémon is not available
-            state.extend([VALUE_UNKNOWN, 0, VALUE_UNKNOWN, VALUE_UNKNOWN])
-        # Player's Moves Availability
+            section = [VALUE_UNKNOWN] * 18
+        state += section
+        section_lengths['opponent'] = len(section)
+        logging.info(f"Opponent Section Length: {section_lengths['opponent']}")
+
+        # Section 3: Player's Moves Information
         if 'active' in reqObject and reqObject['active']:
-            display_state["active"]["moves"] = [{}, {}, {}, {}]
-            for i, move in enumerate(active_player.moves[:4]):
-                pp = int(move.get('pp', 0))
-                maxPP = int(move.get('maxpp', 0))
-                state.append(1.0 if not move.get('disabled', False) else 0.0)
-                display_state["active"]["moves"][i]["enabled"] = 1.0 if not move.get(
-                    'disabled', False) else 0.0
-                state.append(pp / maxPP)
-                display_state["active"]["moves"][i]["ppRatio"] = pp / maxPP
-                state.append(self.type_to_index(move.get("type", '')))
-                display_state["active"]["moves"][i]["type"] = move.get(
-                    "type", '')
-                state.append(move.get("priority", 0))
-                display_state["active"]["moves"][i]["priority"] = move.get(
-                    "priority", 0)
-                state.append(move.get("power", 0)) if move.get(
-                    "power", 0) != None else 0
-                display_state["active"]["moves"][i]["power"] = move.get(
-                    "power", 0)
-                state.append(move.get("accuracy", 0)) if move.get(
-                    "accuracy", 0) != None else 0
-                display_state["active"]["moves"][i]["accuracy"] = move.get(
-                    "accuracy", 0)
+            moves_section = []
+            for move in active_player.moves[:4]:
+                move_info = [
+                    1.0 if not move.get('disabled', False) else 0.0,
+                    move.get('pp', 1) / move.get('maxpp', 1),
+                    self.type_to_index(move.get('type', '')),
+                    move.get('priority', 0),
+                    move.get('power', 0) if move.get('power', 0) != None else 0,
+                    move.get('accuracy', 0) if move.get('accuracy', 0) != None else 100
+                ]
+                moves_section += move_info
+            # Ensure 4 moves with 6 attributes each
+            while len(moves_section) < 24:
+                moves_section += [VALUE_UNKNOWN] * (24 - len(moves_section))
         else:
-            state.extend([VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN,
-                         VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN] * 4)
-        # Player's Team Overview
-        if self._playerSide:
-            display_state["side"] = [{"moves": [{}, {}, {}, {}]}, {"moves": [{}, {}, {}, {}]}, {"moves": [
-                {}, {}, {}, {}]}, {"moves": [{}, {}, {}, {}]}, {"moves": [{}, {}, {}, {}]}, {"moves": [{}, {}, {}, {}]}]
-            paddedSide = list(self._playerSide)
-            # should never realistically happen in 6v6
-            while len(paddedSide) < 6:
-                print("something strange happened")
-                paddedSide.append(ShowdownPokemon())
-            for i, pokemon in enumerate(paddedSide):
-                state.append(pokemon.hp_percentage)
-                display_state["side"][i]["hp_percentage"] = pokemon.hp_percentage
-                movetypes = []
-                for j, m in enumerate(pokemon.moves):
-                    movetypes.append(self.type_to_index(m.get("type", '')))
-                    display_state["side"][i]["moves"][j]["type"] = m.get(
-                        "type", '')
-                    movetypes.append(m.get("priority", VALUE_UNKNOWN))
-                    display_state["side"][i]["moves"][j]["priority"] = m.get(
-                        "priority", '')
-                    movetypes.append(m.get("power", VALUE_UNKNOWN) if m.get(
-                        "power", VALUE_UNKNOWN) != None else 0)
-                    display_state["side"][i]["moves"][j]["power"] = m.get(
-                        "power", '')
-                    movetypes.append(m.get("accuracy", VALUE_UNKNOWN) if m.get(
-                        "accuracy", VALUE_UNKNOWN) != None else 0)
-                    display_state["side"][i]["moves"][j]["accuracy"] = m.get(
-                        "accuracy", '')
-                while len(movetypes) < 4:
-                    movetypes.append(VALUE_UNKNOWN, VALUE_UNKNOWN,
-                                     VALUE_UNKNOWN, VALUE_UNKNOWN)
-                state.extend(movetypes)
-        # Opponent's Team Overview (if available)
-        if self._opposingSide:
-            display_state["oppSide"] = [{"moves": [{}, {}, {}, {}]}, {"moves": [{}, {}, {}, {}]}, {"moves": [
-                {}, {}, {}, {}]}, {"moves": [{}, {}, {}, {}]}, {"moves": [{}, {}, {}, {}]}, {"moves": [{}, {}, {}, {}]}]
-            paddedSide = list(self._opposingSide)
-            while len(paddedSide) < 6:
-                paddedSide.append(ShowdownPokemon())
-            for i, pokemon in enumerate(paddedSide):
-                state.append(pokemon.hp_percentage)
-                display_state["oppSide"][i]["hp_percentage"] = pokemon.hp_percentage
-                movetypes = []
-                for j, m in enumerate(pokemon.moves):
-                    movetypes.append(self.type_to_index(m.get("type", '')))
-                    display_state["oppSide"][i]["moves"][j]["type"] = m.get(
-                        "type", '')
-                    movetypes.append(m.get("priority", VALUE_UNKNOWN))
-                    display_state["oppSide"][i]["moves"][j]["priority"] = m.get(
-                        "priority", '')
-                    movetypes.append(m.get("power", VALUE_UNKNOWN) if m.get(
-                        "power", VALUE_UNKNOWN) != None else 0)
-                    display_state["oppSide"][i]["moves"][j]["power"] = m.get(
-                        "power", None)
-                    movetypes.append(m.get("accuracy", VALUE_UNKNOWN) if m.get(
-                        "accuracy", VALUE_UNKNOWN) != None else 0)
-                    display_state["oppSide"][i]["moves"][j]["accuracy"] = m.get(
-                        "accuracy", '')
-                while len(movetypes) < 4:
-                    movetypes.append(VALUE_UNKNOWN, VALUE_UNKNOWN,
-                                     VALUE_UNKNOWN, VALUE_UNKNOWN)
-                state.extend(movetypes)
-        else:
-            state.extend([VALUE_UNKNOWN, VALUE_UNKNOWN,
-                         VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN] * 6)
-        logging.info("Current display state vector: %s", display_state)
+            moves_section = [VALUE_UNKNOWN] * 24
+        state += moves_section
+        section_lengths['moves'] = len(moves_section)
+        logging.info(f"Moves Section Length: {section_lengths['moves']}")
+
+        # Section 4: Player's Team Overview
+        team_section = []
+        for pokemon in self._playerSide[:6]:
+            pokemon_info = [
+                pokemon.hp_percentage,
+                self.type_to_index(pokemon.type),
+                self.type_to_index(pokemon.type2 if pokemon.type2 is not None else ''),
+                self.type_to_index(pokemon.moves[0].get('type', '')) if len(pokemon.moves) > 0 else VALUE_UNKNOWN,
+                self.type_to_index(pokemon.moves[1].get('type', '')) if len(pokemon.moves) > 1 else VALUE_UNKNOWN,
+                self.type_to_index(pokemon.moves[2].get('type', '')) if len(pokemon.moves) > 2 else VALUE_UNKNOWN,
+                self.type_to_index(pokemon.moves[3].get('type', '')) if len(pokemon.moves) > 3 else VALUE_UNKNOWN,
+            ]
+            team_section += pokemon_info
+        # Pad with unknown if less than 6
+        while len(team_section) < 42:  # 7 attributes per Pokémon x 6 pokemon
+            team_section += [VALUE_UNKNOWN] * (42 - len(team_section))
+        state += team_section
+        section_lengths['player_team'] = len(team_section)
+        logging.info(f"Player Team Section Length: {section_lengths['player_team']}")
+
+        # Section 5: Opponent's Team Overview
+        opponent_team_section = []
+        for pokemon in self._opposingSide[:6]:
+            pokemon_info = [
+                pokemon.hp_percentage,
+                self.type_to_index(pokemon.type),
+                self.type_to_index(pokemon.type2 if pokemon.type2 is not None else ''),
+                self.type_to_index(pokemon.moves[0].get('type', '')) if len(pokemon.moves) > 0 else VALUE_UNKNOWN,
+                self.type_to_index(pokemon.moves[1].get('type', '')) if len(pokemon.moves) > 1 else VALUE_UNKNOWN,
+                self.type_to_index(pokemon.moves[2].get('type', '')) if len(pokemon.moves) > 2 else VALUE_UNKNOWN,
+                self.type_to_index(pokemon.moves[3].get('type', '')) if len(pokemon.moves) > 3 else VALUE_UNKNOWN,
+            ]
+            opponent_team_section += pokemon_info
+        # Pad with unknown if less than 6
+        while len(opponent_team_section) < 42:  # 7 attributes per Pokémon
+            opponent_team_section += [VALUE_UNKNOWN] * (42 - len(opponent_team_section))
+        state += opponent_team_section
+        section_lengths['opponent_team'] = len(opponent_team_section)
+        logging.info(f"Opponent Team Section Length: {section_lengths['opponent_team']}")
+
+        # Log total state length
+        logging.info(f"Total State Length: {len(state)}")
         return state
 
     def __repr__(self) -> str:
@@ -437,7 +438,7 @@ class ShowdownConnection(object):
         else:
             self.useTeams = useTeams
         # 13 features, 9 actions
-        self.agent = DQNAgent(state_size=84, action_size=9)
+        self.agent = DQNAgent(state_size=144, action_size=9)
         self.batch_size = 32
         self.last_battle_id = None
         logging.info(
@@ -452,7 +453,7 @@ class ShowdownConnection(object):
 
         # Move IDs (Hash move IDs)
         for move in pokemon['moves'][:4]:
-            move_id = self._get_move_id_hash(move['id'])
+            move_id = self._get_hash(move['id'])
             features.append(move_id)
 
         # Current and Max HP
@@ -1176,7 +1177,7 @@ class ShowdownConnection(object):
 
             # Log the experience replay
             logging.info("Replayed experience with reward: %s", reward)
-            logging.info("Next state: %s", next_state)
+            logging.info("Next state (len %d): %s", len(next_state), next_state)
 
         # Get current state and valid actions
         state = battle._get_state_vector(reqObject)
@@ -1216,7 +1217,7 @@ class ShowdownConnection(object):
         logging.info("Executing command: %s", command)
         self.sendCommand(command, room_id=roomName)
 
-    def _get_move_id_hash(self, move_id):
+    def _get_hash(self, move_id):
         # Simple hash function for move IDs
         return abs(hash(move_id)) % (2 ** 32)
 
