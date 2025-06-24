@@ -1,3 +1,4 @@
+import math
 import os
 import logging
 from random import choice, randint, shuffle
@@ -20,6 +21,9 @@ logging.basicConfig(
 
 with open("./config.json") as cfg:
     CONFIG = json.load(cfg)
+
+with open("./moves.json") as cfg:
+    MOVES : list = json.load(cfg)
 
 # SHOWDOWN WEBSOCKET URL
 SHOWDOWN_WS_URL = CONFIG["websocket"]["url"]
@@ -53,7 +57,7 @@ class ShowdownPokemon:
                       "spd": VALUE_UNKNOWN, "spe": VALUE_UNKNOWN}  # HP, Atk, Def, SpA, SpD, Spe
         self.statBoosts = {"atk": 6, "def": 6, "spa": 6,
                            "spd": 6, "spe": 6, "accuracy" : 6, "evasion" : 6}  # HP, Atk, Def, SpA, SpD, Spd
-        self.hp_percentage = 1.0  # Default to full HP if not specified
+        self.hp_percentage = VALUE_UNKNOWN
         self.statusCondition = VALUE_UNKNOWN  # 'brn', 'psn', etc.
         self.moves = [{
             "move": VALUE_UNKNOWN,
@@ -61,6 +65,8 @@ class ShowdownPokemon:
             "pp": VALUE_UNKNOWN,
             "maxpp": VALUE_UNKNOWN,
             "target": VALUE_UNKNOWN,
+            "type" : VALUE_UNKNOWN,
+            "priority" : VALUE_UNKNOWN,
             "disabled": False
         }, {
             "move": VALUE_UNKNOWN,
@@ -68,6 +74,8 @@ class ShowdownPokemon:
             "pp": VALUE_UNKNOWN,
             "maxpp": VALUE_UNKNOWN,
             "target": VALUE_UNKNOWN,
+            "type" : VALUE_UNKNOWN,
+            "priority" : VALUE_UNKNOWN,
             "disabled": False
         }, {
             "move": VALUE_UNKNOWN,
@@ -75,6 +83,8 @@ class ShowdownPokemon:
             "pp": VALUE_UNKNOWN,
             "maxpp": VALUE_UNKNOWN,
             "target": VALUE_UNKNOWN,
+            "type" : VALUE_UNKNOWN,
+            "priority" : VALUE_UNKNOWN,
             "disabled": False
         }, {
             "move": VALUE_UNKNOWN,
@@ -82,6 +92,8 @@ class ShowdownPokemon:
             "pp": VALUE_UNKNOWN,
             "maxpp": VALUE_UNKNOWN,
             "target": VALUE_UNKNOWN,
+            "type" : VALUE_UNKNOWN,
+            "priority" : VALUE_UNKNOWN,
             "disabled": False
         }]  # List of move dictionaries
         self.ability = VALUE_UNKNOWN
@@ -139,11 +151,18 @@ class ShowdownPokemon:
             # the first time we get valid move ids, we make new move objects and replace the value unknown ones
             self.moves = [x for x in self.moves if x["id"] != VALUE_UNKNOWN]
             new_pkmn_moves = []
-            for i in pokemon_data['moves']:
-                if not i in [x["id"] for x in self.moves]:
+            for move in pokemon_data['moves']:
+                if not move in [x["id"] for x in self.moves]:
                     new_pkmn_moves.append(
-                        {"move": "unknown", "id": i, "pp": -1, "maxpp": -1, "target": -1, "disabled": -1})
+                        {"move": "unknown", "id": move, "pp": -1, "maxpp": -1, "target": -1, "disabled": -1})
             self.moves.extend(new_pkmn_moves)
+            for move in self.moves:
+                move_lookup = [x for x in MOVES if x["name"] == move["id"]]
+                if len(move_lookup) > 0:
+                    move["maxpp"] = math.floor(move_lookup[0]["data"]["pp"] * 1.6)
+                    move["type"] = move_lookup[0]["data"]["type"]
+                    # yes technically vital throw will always have an unknown priority because of this blah blah blah
+                    move["priority"] = move_lookup[0]["data"]["priority"]
         if "stats" in pokemon_data:
             self.stats = pokemon_data["stats"]
         if 'baseAbility' in pokemon_data:
@@ -177,6 +196,7 @@ class ShowdownBattle(object):
         self.last_action = 0
         self.last_valid_actions = list[bool] | None
         self.last_request = None
+        self.waiting_for_details = False
 
     def update_player_side(self, side_data):
         for pokemon_data in side_data['pokemon']:
@@ -194,7 +214,9 @@ class ShowdownBattle(object):
 
     def update_active_pokemon(self, active_data):
         """ Parse the active object in the request object. """
-        self._activePlayerPokemon.moves = active_data[0]["moves"]
+        for i, v in enumerate(self._activePlayerPokemon.moves):
+            if active_data[0]["moves"][i]["id"] in [x["id"] for x in self._activePlayerPokemon.moves]:
+                v.update(active_data[0]["moves"][i])
 
     def update_opposing_side(self, opposing_data):
         for pokemon_data in opposing_data['pokemon']:
@@ -207,6 +229,102 @@ class ShowdownBattle(object):
                 self._opposingSide.append(new_pokemon)
                 if new_pokemon.is_active:
                     self._activeOpponentPokemon = new_pokemon
+
+    def _get_condition_index(self, condition):
+        condition_map = {'': 0, 'brn': 1,
+                         'psn': 2, 'par': 3, 'slp': 4, 'frz': 5, 'fnt' : 6}
+        return condition_map.get(condition, 0)
+
+    def type_to_index(self, type_str):
+        if not type_str == VALUE_UNKNOWN:
+            type_str = type_str.lower() if (type_str) else ''
+        type_map = {
+            VALUE_UNKNOWN : -1,
+            '': 0,
+            'normal': 1,
+            'fire': 2,
+            'water': 3,
+            'electric': 4,
+            'grass': 5,
+            'ice': 6,
+            'fighting': 7,
+            'poison': 8,
+            'ground': 9,
+            'flying': 10,
+            'psychic': 11,
+            'bug': 12,
+            'rock': 13,
+            'ghost': 14,
+            'steel': 15,
+            'dragon': 16,
+            'dark': 17,
+            'fairy': 18,
+            'unknown': 19,
+            'shadow': 20
+        }
+        return type_map.get(type_str, 0)
+
+    def _get_state_vector(self, reqObject) -> list[float]:
+        state = []
+        # Active Player Pokémon's HP and status
+        active_player = self._activePlayerPokemon
+        state.append(active_player.hp_percentage)
+        state.append(self._get_condition_index(active_player.statusCondition if active_player.statusCondition else ''))
+        state.append(self.type_to_index(active_player.type))
+        state.append(self.type_to_index(active_player.type2 if active_player.type2 != None else ''))
+        # Active Opponent Pokémon's HP and status (if available)
+        active_opponent = self._activeOpponentPokemon
+        if active_opponent:
+            state.append(active_opponent.hp_percentage)
+            state.append(self._get_condition_index(active_opponent.statusCondition if active_opponent.statusCondition else ''))
+            state.append(self.type_to_index(active_opponent.type))
+            state.append(self.type_to_index(active_opponent.type2 if active_opponent.type2 != None else ''))
+        else:
+            # Use default values if opponent's active Pokémon is not available
+            state.extend([VALUE_UNKNOWN, 0, VALUE_UNKNOWN, VALUE_UNKNOWN])
+        # Player's Moves Availability
+        if 'active' in reqObject and reqObject['active']:
+            for move in active_player.moves[:4]:
+                pp = int(move.get('pp', 0))
+                maxPP = int(move.get('maxpp', 0))
+                state.append(1.0 if not move.get('disabled', False) else 0.0)
+                state.append(pp / maxPP)
+                state.append(self.type_to_index(move.get("type", '')))
+                state.append(move.get("priority", 0))
+        else:
+            state.extend([VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN] * 4)
+        # Player's Team Overview
+        if self._playerSide:
+            paddedSide = list(self._playerSide)
+            # should never realistically happen in 6v6
+            while len(paddedSide) < 6:
+                print("something strange happened")
+                paddedSide.append(ShowdownPokemon())
+            for pokemon in paddedSide:
+                state.append(pokemon.hp_percentage)
+                movetypes = []
+                for m in pokemon.moves:
+                    movetypes.append(self.type_to_index(m.get("type", '')))
+                while len(movetypes) < 4:
+                    movetypes.append(VALUE_UNKNOWN)
+                state.extend(movetypes)
+        # Opponent's Team Overview (if available)
+        if self._opposingSide:
+            paddedSide = list(self._opposingSide)
+            while len(paddedSide) < 6:
+                paddedSide.append(ShowdownPokemon())
+            for pokemon in paddedSide:
+                state.append(pokemon.hp_percentage)
+                movetypes = []
+                for m in pokemon.moves:
+                    movetypes.append(self.type_to_index(m.get("type", '')))
+                while len(movetypes) < 4:
+                    movetypes.append(VALUE_UNKNOWN)
+                state.extend(movetypes)
+        else:
+            state.extend([VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN] * 6)
+        
+        return state
 
     def __repr__(self) -> str:
         return self.__str__()
@@ -241,76 +359,11 @@ class ShowdownConnection(object):
         else:
             self.useTeams = useTeams
         # 13 features, 9 actions
-        self.agent = DQNAgent(state_size=12, action_size=9)
+        self.agent = DQNAgent(state_size=84, action_size=9)
         self.batch_size = 32
         self.last_battle_id = None
         logging.info(
             "Initialized ShowdownConnection for username: %s", username)
-
-    def _get_state_vector(self, reqObject, battle=None) -> list[int]:
-        """Convert battle state to numerical vector"""
-        # Find active Pokémon from side data
-        active_pokemon = None
-        for p in reqObject['side']['pokemon']:
-            if p['active']:
-                active_pokemon = p
-                break
-
-        # Parse active Pokémon condition
-        if active_pokemon:
-            cond_parts = active_pokemon['condition'].split()
-            hp_part = cond_parts[0]
-
-            if 'fnt' in active_pokemon['condition']:
-                # Fainted Pokémon
-                hp_ratio = 0.0
-                status_idx = 0
-            else:
-                # Parse HP values
-                if '/' in hp_part:
-                    current_hp, max_hp = hp_part.split('/')
-                    hp_ratio = float(current_hp) / float(max_hp)
-                else:
-                    hp_ratio = 1.0  # Default if parsing fails
-
-                # Parse status condition
-                status_map = {'healthy': 0, 'brn': 1,
-                              'psn': 2, 'par': 3, 'slp': 4, 'frz': 5}
-                status_str = cond_parts[1] if len(
-                    cond_parts) > 1 else 'healthy'
-                status_idx = status_map.get(status_str.split(' ')[0], 0)
-        else:
-            # No active Pokémon found
-            hp_ratio = 0.0
-            status_idx = 0
-
-        # Move availability (1 = available, 0 = disabled)
-        move_available = [0, 0, 0, 0]  # Default to all disabled
-        if 'active' in reqObject and reqObject['active']:
-            for i, move in enumerate(reqObject['active'][0]['moves'][:4]):
-                if not move.get('disabled', False):
-                    move_available[i] = 1
-
-        # Team status (remaining HP for each Pokémon)
-        team_hp = []
-        for p in reqObject['side']['pokemon']:
-            if 'fnt' in p['condition']:
-                team_hp.append(0.0)
-            else:
-                cond_parts = p['condition'].split()
-                hp_part = cond_parts[0]
-                if '/' in hp_part:
-                    current_hp, max_hp = hp_part.split('/')
-                    team_hp.append(float(current_hp) / float(max_hp))
-                else:
-                    team_hp.append(0.0)  # Default if parsing fails
-
-        # Pad to 6 Pokémon
-        while len(team_hp) < 6:
-            team_hp.append(0.0)
-
-        # Combine all features
-        return [hp_ratio, status_idx] + move_available + team_hp
 
     def _get_pokemon_features(self, pokemon: ShowdownPokemon, is_opponent=False) -> list[float]:
         features = []
@@ -387,6 +440,14 @@ class ShowdownConnection(object):
                             break
             time.sleep(CONFIG["loopSleep"])
 
+    def mainLoop(self):
+        for id, battle in self._currentBattles.items():
+            if battle.waiting_for_details:
+                if battle._activePlayerPokemon.type != VALUE_UNKNOWN and battle._activeOpponentPokemon.type != VALUE_UNKNOWN:
+                    self.decideAction(reqObject=battle.last_request, roomName=battle._roomName, battle=battle)
+                    battle.waiting_for_details = False
+        time.sleep(CONFIG["loopSleep"])
+
     def handleRequest(self, args, roomid):
         capture = True
         req_object = json.loads(args[1])
@@ -401,8 +462,16 @@ class ShowdownConnection(object):
                     battle.update_active_pokemon(req_object["active"])
                 if 'opposingSide' in req_object:
                     battle.update_opposing_side(req_object['opposingSide'])
-                self.decideAction(reqObject=json.loads(
-                    args[1]), roomName=roomid, battle=battle)
+                
+                player_pokemon = battle._activePlayerPokemon
+                opponent_pokemon = battle._activeOpponentPokemon
+                
+                if player_pokemon and player_pokemon.type != VALUE_UNKNOWN and opponent_pokemon and opponent_pokemon.type != VALUE_UNKNOWN:
+                    self.decideAction(reqObject=json.loads(
+                        args[1]), roomName=roomid, battle=battle)
+                # we need to wait for details to come back
+                elif battle._activePlayerPokemon and battle._activeOpponentPokemon and (battle._activePlayerPokemon.type == VALUE_UNKNOWN or battle._activeOpponentPokemon.type == VALUE_UNKNOWN):
+                    battle.waiting_for_details = True
         return capture
 
     def handleTurnEvents(self, lines, roomid):
@@ -500,8 +569,13 @@ class ShowdownConnection(object):
                             if len(unknownmoves) > 0 and not moveid in knownmoveids:
                                 unknownmoves[0]["id"] = moveid
                                 unknownmoves[0]["move"] = parts[2]
-                                self.sendCommand(f"/details {moveid}")
-                                time.sleep(1)
+                                move_lookup = [x for x in MOVES if x["name"] == moveid]
+                                if len(move_lookup) > 0:
+                                    unknownmoves[0]["pp"] = math.floor(move_lookup[0]["data"]["pp"] * 1.6)
+                                    unknownmoves[0]["maxpp"] = math.floor(move_lookup[0]["data"]["pp"] * 1.6)
+                                    unknownmoves[0]["type"] = move_lookup[0]["data"]["type"] 
+                                # self.sendCommand(f"/details {moveid}")
+                                # time.sleep(1)
                 elif event == "-damage":
                     # Handle damage events
                     parts = linesplit
@@ -664,7 +738,10 @@ class ShowdownConnection(object):
                     if move['id'] == move_details['id']:
                         move['type'] = move_details['type']
                         move['category'] = move_details['category']
-                        move['power'] = move_details['power']
+                        if 'power' in move:
+                            move['power'] = move_details['power']
+                        else:
+                            move["power"] = 0
                         move['accuracy'] = move_details['accuracy']
                         move['pp'] = move_details['pp']
                         move["maxpp"] = move_details["pp"]
@@ -811,15 +888,40 @@ class ShowdownConnection(object):
         capture = True
         searchjson = json.loads(args[1])
         if searchjson and searchjson["games"] != None:
-            for i in searchjson["games"]:
-                if not i in self._currentBattles:
-                    isplit = i.split("-")
+            for game_id in searchjson["games"]:
+                # Split the game_id to extract the base room name and UUID
+                parts = game_id.split('-')
+                if len(parts) > 3:
+                    base_room_name = '-'.join(parts[:-1])
+                    uuid = parts[-1]
+                    new_room_name = game_id
+                else:
+                    base_room_name = '-'.join(parts)
+                    uuid = None
+                    new_room_name = game_id
+
+                if base_room_name not in self._currentBattles:
+                    isplit = base_room_name.split("-")
                     newGame = ShowdownBattle(self)
                     newGame._format = isplit[1]
                     newGame._roomId = int(isplit[2])
-                    newGame._roomName = i
-                    self._currentBattles[i] = newGame
-                    logging.info("New battle detected: %s", i)
+                    newGame._roomName = new_room_name  # Use the new room name with UUID
+                    self._currentBattles[new_room_name] = newGame
+                    logging.info("New battle detected: %s", new_room_name)
+                else:
+                    # Update the room name in the existing battle
+                    existing_battle = self._currentBattles.get(base_room_name)
+                    if existing_battle:
+                        existing_battle._roomName = new_room_name
+                        self._currentBattles[new_room_name] = existing_battle
+                        if base_room_name != new_room_name:
+                            del self._currentBattles[base_room_name]
+                        logging.info("Updated battle room name to: %s", new_room_name)
+            # Clean up any battles that no longer exist
+            for battle_room_name in list(self._currentBattles.keys()):
+                if battle_room_name not in searchjson["games"]:
+                    del self._currentBattles[battle_room_name]
+                    logging.info("Removed battle: %s", battle_room_name)
         elif searchjson["games"] == None:
             self._currentBattles.clear()
             logging.info("No games found. Clearing current battles.")
@@ -892,6 +994,7 @@ class ShowdownConnection(object):
                             if roomId in self._currentBattles:
                                 del self._currentBattles[roomId]
                     elif command == "error":
+                        battle = self._currentBattles.get(roomId)
                         # Handle invalid choices
                         if "Invalid choice" in lineSplit[1]:
                             error_msg = lineSplit[1]
@@ -904,15 +1007,15 @@ class ShowdownConnection(object):
                             if current_request:
                                 # Adjust the decision-making process
                                 self.adjustDecisionForTrappedPokemon(
-                                    current_request)
+                                    current_request, battle)
         return capture
 
-    def adjustDecisionForTrappedPokemon(self, request):
+    def adjustDecisionForTrappedPokemon(self, request, battle : ShowdownBattle):
         """
         Adjust the decision-making process when the active Pokémon is trapped.
         """
         # Get the current state and valid actions
-        state = self._get_state_vector(request)
+        state = battle._get_state_vector(request)
         valid_actions = self._get_valid_actions_mask(request)
 
         # Remove switching options if the Pokémon is trapped
@@ -976,7 +1079,7 @@ class ShowdownConnection(object):
         # Store previous experience if available
         if battle.last_state is not None and battle.last_valid_actions is not None:
             reward = 0  # Small intermediate reward
-            next_state = self._get_state_vector(reqObject)
+            next_state = battle._get_state_vector(reqObject)
             self.agent.remember(battle.last_state,
                                 battle.last_action, reward, next_state, False)
             self.agent.replay(self.batch_size)
@@ -986,7 +1089,7 @@ class ShowdownConnection(object):
             logging.info("Next state: %s", next_state)
 
         # Get current state and valid actions
-        state = self._get_state_vector(reqObject, battle=battle)
+        state = battle._get_state_vector(reqObject)
         valid_actions = self._get_valid_actions_mask(reqObject)
 
         # Log the current state and valid actions
@@ -1022,37 +1125,6 @@ class ShowdownConnection(object):
         # Log the command being sent
         logging.info("Executing command: %s", command)
         self.sendCommand(command, room_id=roomName)
-
-    def type_to_index(self, type_str):
-        type_map = {
-            '': 0,
-            'normal': 1,
-            'fire': 2,
-            'water': 3,
-            'electric': 4,
-            'grass': 5,
-            'ice': 6,
-            'fighting': 7,
-            'poison': 8,
-            'ground': 9,
-            'flying': 10,
-            'psychic': 11,
-            'bug': 12,
-            'rock': 13,
-            'ghost': 14,
-            'steel': 15,
-            'dragon': 16,
-            'dark': 17,
-            'fairy': 18,
-            'unknown': 19,
-            'shadow': 20
-        }
-        return type_map.get(type_str, 0)
-
-    def _get_condition_index(self, condition):
-        condition_map = {'': 0, 'brn': 1,
-                         'psn': 2, 'par': 3, 'slp': 4, 'frz': 5}
-        return condition_map.get(condition, 0)
 
     def _get_move_id_hash(self, move_id):
         # Simple hash function for move IDs
@@ -1309,4 +1381,4 @@ if __name__ == "__main__":
         logging.info("Loaded existing model from model.pth")
     sd.Start(model=model)
     while not sd._exit:
-        pass
+        sd.mainLoop()
