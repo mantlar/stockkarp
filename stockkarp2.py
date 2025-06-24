@@ -67,6 +67,8 @@ class ShowdownPokemon:
             "target": VALUE_UNKNOWN,
             "type" : VALUE_UNKNOWN,
             "priority" : VALUE_UNKNOWN,
+            "power" : VALUE_UNKNOWN,
+            "accuracy" : VALUE_UNKNOWN,
             "disabled": False
         }, {
             "move": VALUE_UNKNOWN,
@@ -76,6 +78,8 @@ class ShowdownPokemon:
             "target": VALUE_UNKNOWN,
             "type" : VALUE_UNKNOWN,
             "priority" : VALUE_UNKNOWN,
+            "power" : VALUE_UNKNOWN,
+            "accuracy" : VALUE_UNKNOWN,
             "disabled": False
         }, {
             "move": VALUE_UNKNOWN,
@@ -85,6 +89,8 @@ class ShowdownPokemon:
             "target": VALUE_UNKNOWN,
             "type" : VALUE_UNKNOWN,
             "priority" : VALUE_UNKNOWN,
+            "power" : VALUE_UNKNOWN,
+            "accuracy" : VALUE_UNKNOWN,
             "disabled": False
         }, {
             "move": VALUE_UNKNOWN,
@@ -94,6 +100,8 @@ class ShowdownPokemon:
             "target": VALUE_UNKNOWN,
             "type" : VALUE_UNKNOWN,
             "priority" : VALUE_UNKNOWN,
+            "power" : VALUE_UNKNOWN,
+            "accuracy" : VALUE_UNKNOWN,
             "disabled": False
         }]  # List of move dictionaries
         self.ability = VALUE_UNKNOWN
@@ -163,6 +171,8 @@ class ShowdownPokemon:
                     move["type"] = move_lookup[0]["data"]["type"]
                     # yes technically vital throw will always have an unknown priority because of this blah blah blah
                     move["priority"] = move_lookup[0]["data"]["priority"]
+                    move["power"] = move_lookup[0]["data"]["power"]
+                    move["accuracy"] = move_lookup[0]["data"]["accuracy"]
         if "stats" in pokemon_data:
             self.stats = pokemon_data["stats"]
         if 'baseAbility' in pokemon_data:
@@ -305,8 +315,12 @@ class ShowdownBattle(object):
                 display_state["active"]["moves"][i]["type"] = move.get("type", '')
                 state.append(move.get("priority", 0))
                 display_state["active"]["moves"][i]["priority"] = move.get("priority", 0)
+                state.append(move.get("power", 0)) if move.get("power", 0) != None else 0 
+                display_state["active"]["moves"][i]["power"] = move.get("power", 0)
+                state.append(move.get("accuracy", 0)) if move.get("accuracy", 0) != None else 0
+                display_state["active"]["moves"][i]["accuracy"] = move.get("accuracy", 0)
         else:
-            state.extend([VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN] * 4)
+            state.extend([VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN] * 4)
         # Player's Team Overview
         if self._playerSide:
             display_state["side"] = [{"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}]
@@ -322,8 +336,14 @@ class ShowdownBattle(object):
                 for j, m in enumerate(pokemon.moves):
                     movetypes.append(self.type_to_index(m.get("type", '')))
                     display_state["side"][i]["moves"][j]["type"] = m.get("type", '')
+                    movetypes.append(m.get("priority", VALUE_UNKNOWN))
+                    display_state["side"][i]["moves"][j]["priority"] = m.get("priority", '')
+                    movetypes.append(m.get("power", VALUE_UNKNOWN) if m.get("power", VALUE_UNKNOWN) != None else 0)
+                    display_state["side"][i]["moves"][j]["power"] = m.get("power", '')
+                    movetypes.append(m.get("accuracy", VALUE_UNKNOWN) if m.get("accuracy", VALUE_UNKNOWN) != None else 0)
+                    display_state["side"][i]["moves"][j]["accuracy"] = m.get("accuracy", '')
                 while len(movetypes) < 4:
-                    movetypes.append(VALUE_UNKNOWN)
+                    movetypes.append(VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN)
                 state.extend(movetypes)
         # Opponent's Team Overview (if available)
         if self._opposingSide:
@@ -338,8 +358,14 @@ class ShowdownBattle(object):
                 for j, m in enumerate(pokemon.moves):
                     movetypes.append(self.type_to_index(m.get("type", '')))
                     display_state["oppSide"][i]["moves"][j]["type"] = m.get("type", '')
+                    movetypes.append(m.get("priority", VALUE_UNKNOWN))
+                    display_state["oppSide"][i]["moves"][j]["priority"] = m.get("priority", '')
+                    movetypes.append(m.get("power", VALUE_UNKNOWN) if m.get("power", VALUE_UNKNOWN) != None else 0)
+                    display_state["oppSide"][i]["moves"][j]["power"] = m.get("power", None)
+                    movetypes.append(m.get("accuracy", VALUE_UNKNOWN) if m.get("accuracy", VALUE_UNKNOWN) != None else 0 )
+                    display_state["oppSide"][i]["moves"][j]["accuracy"] = m.get("accuracy", '') 
                 while len(movetypes) < 4:
-                    movetypes.append(VALUE_UNKNOWN)
+                    movetypes.append(VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN)
                 state.extend(movetypes)
         else:
             state.extend([VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN] * 6)
@@ -593,7 +619,10 @@ class ShowdownConnection(object):
                                 if len(move_lookup) > 0:
                                     unknownmoves[0]["pp"] = math.floor(move_lookup[0]["data"]["pp"] * 1.6)
                                     unknownmoves[0]["maxpp"] = math.floor(move_lookup[0]["data"]["pp"] * 1.6)
-                                    unknownmoves[0]["type"] = move_lookup[0]["data"]["type"] 
+                                    unknownmoves[0]["type"] = move_lookup[0]["data"]["type"]
+                                    unknownmoves[0]["priority"] = move_lookup[0]["data"]["priority"] 
+                                    unknownmoves[0]["power"] = move_lookup[0]["data"]["power"] 
+                                    unknownmoves[0]["accuracy"] = move_lookup[0]["data"]["accuracy"] 
                                 # self.sendCommand(f"/details {moveid}")
                                 # time.sleep(1)
                 elif event == "-damage":
