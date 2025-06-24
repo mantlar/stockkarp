@@ -266,64 +266,84 @@ class ShowdownBattle(object):
 
     def _get_state_vector(self, reqObject) -> list[float]:
         state = []
+        display_state = {"active" : {}, "oppActive" : {}, "side" : [], "oppSide" : []}
         # Active Player Pokémon's HP and status
         active_player = self._activePlayerPokemon
         state.append(active_player.hp_percentage)
+        display_state["active"]["hp_percentage"] = active_player.hp_percentage
         state.append(self._get_condition_index(active_player.statusCondition if active_player.statusCondition else ''))
+        display_state["active"]["condition"] = active_player.statusCondition
         state.append(self.type_to_index(active_player.type))
+        display_state["active"]["type"] = active_player.type
         state.append(self.type_to_index(active_player.type2 if active_player.type2 != None else ''))
+        display_state["active"]["type2"] = active_player.type2 if active_player.type2 != None else ''
         # Active Opponent Pokémon's HP and status (if available)
         active_opponent = self._activeOpponentPokemon
         if active_opponent:
             state.append(active_opponent.hp_percentage)
+            display_state["oppActive"]["hp_percentage"] = active_opponent.hp_percentage
             state.append(self._get_condition_index(active_opponent.statusCondition if active_opponent.statusCondition else ''))
+            display_state["oppActive"]["condition"] = active_opponent.statusCondition
             state.append(self.type_to_index(active_opponent.type))
+            display_state["oppActive"]["type"] = active_opponent.type
             state.append(self.type_to_index(active_opponent.type2 if active_opponent.type2 != None else ''))
+            display_state["oppActive"]["type2"] = active_opponent.type2 if active_opponent.type2 != None else ''
         else:
             # Use default values if opponent's active Pokémon is not available
             state.extend([VALUE_UNKNOWN, 0, VALUE_UNKNOWN, VALUE_UNKNOWN])
         # Player's Moves Availability
         if 'active' in reqObject and reqObject['active']:
-            for move in active_player.moves[:4]:
+            display_state["active"]["moves"] = [{}, {}, {}, {}]
+            for i, move in enumerate(active_player.moves[:4]):
                 pp = int(move.get('pp', 0))
                 maxPP = int(move.get('maxpp', 0))
                 state.append(1.0 if not move.get('disabled', False) else 0.0)
+                display_state["active"]["moves"][i]["enabled"] = 1.0 if not move.get('disabled', False) else 0.0
                 state.append(pp / maxPP)
+                display_state["active"]["moves"][i]["ppRatio"] = pp / maxPP
                 state.append(self.type_to_index(move.get("type", '')))
+                display_state["active"]["moves"][i]["type"] = move.get("type", '')
                 state.append(move.get("priority", 0))
+                display_state["active"]["moves"][i]["priority"] = move.get("priority", 0)
         else:
             state.extend([VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN] * 4)
         # Player's Team Overview
         if self._playerSide:
+            display_state["side"] = [{"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}]
             paddedSide = list(self._playerSide)
             # should never realistically happen in 6v6
             while len(paddedSide) < 6:
                 print("something strange happened")
                 paddedSide.append(ShowdownPokemon())
-            for pokemon in paddedSide:
+            for i, pokemon in enumerate(paddedSide):
                 state.append(pokemon.hp_percentage)
+                display_state["side"][i]["hp_percentage"] = pokemon.hp_percentage
                 movetypes = []
-                for m in pokemon.moves:
+                for j, m in enumerate(pokemon.moves):
                     movetypes.append(self.type_to_index(m.get("type", '')))
+                    display_state["side"][i]["moves"][j]["type"] = m.get("type", '')
                 while len(movetypes) < 4:
                     movetypes.append(VALUE_UNKNOWN)
                 state.extend(movetypes)
         # Opponent's Team Overview (if available)
         if self._opposingSide:
+            display_state["oppSide"] = [{"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}, {"moves" : [{}, {}, {}, {}]}]
             paddedSide = list(self._opposingSide)
             while len(paddedSide) < 6:
                 paddedSide.append(ShowdownPokemon())
-            for pokemon in paddedSide:
+            for i, pokemon in enumerate(paddedSide):
                 state.append(pokemon.hp_percentage)
+                display_state["oppSide"][i]["hp_percentage"] = pokemon.hp_percentage
                 movetypes = []
-                for m in pokemon.moves:
+                for j, m in enumerate(pokemon.moves):
                     movetypes.append(self.type_to_index(m.get("type", '')))
+                    display_state["oppSide"][i]["moves"][j]["type"] = m.get("type", '')
                 while len(movetypes) < 4:
                     movetypes.append(VALUE_UNKNOWN)
                 state.extend(movetypes)
         else:
             state.extend([VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN, VALUE_UNKNOWN] * 6)
-        
+        logging.info("Current display state vector: %s", display_state)
         return state
 
     def __repr__(self) -> str:
