@@ -45,6 +45,100 @@ class LoginException(Exception):
         return repr(self.res)
 
 
+class StatNormalizer:
+    def __init__(self):
+        # Dual caching system
+        self.stat_cache = {}  # For actual stats
+        self.base_stat_cache = {}  # For base stat estimations
+        self.level = 100  # Default to L100 for competitive
+        
+        # Pre-cache common competitive ranges
+        self._precache_common_stats()
+        
+    def _precache_common_stats(self):
+        """Pre-caches min/max for common base stat ranges"""
+        for base in range(30, 256, 5):  # All reasonable base stats
+            self.get_min_stat(base)
+            self.get_max_stat(base)
+            self.get_estimated_stat_range(base)
+    
+    def get_estimated_stat_range(self, base_stat):
+        """
+        Returns (estimated_min, estimated_max) for base stats when actual stats are unknown.
+        Uses common competitive spreads (assumes 31 IVs and 252 EVs in relevant stats).
+        """
+        key = (base_stat, 'estimated')
+        if key not in self.base_stat_cache:
+            # Competitive minimum (neutral nature, 0 EVs)
+            min_est = math.floor((((2 * base_stat + 31) * self.level) / 100) + 5)
+            
+            # Competitive maximum (beneficial nature, 252 EVs)
+            max_est = math.floor((((2 * base_stat + 31 + 63) * self.level) / 100) + 5) * 1.1
+            
+            self.base_stat_cache[key] = (min_est, math.floor(max_est))
+        return self.base_stat_cache[key]
+    
+    def get_min_stat(self, base, level=100):
+        """Minimum possible stat (0 IV/EV, negative nature)"""
+        key = (base, level, 'min')
+        if key not in self.stat_cache:
+            self.stat_cache[key] = math.floor(math.floor(((2 * base * level) / 100) + 5) * 0.9)
+        return self.stat_cache[key]
+    
+    def get_max_stat(self, base, level=100):
+        """Maximum possible stat (31 IV/252 EV, positive nature)"""
+        key = (base, level, 'max')
+        if key not in self.stat_cache:
+            self.stat_cache[key] = math.floor(math.floor((((2 * base + 31 + 63) * level) / 100) + 5) * 1.1)
+        return self.stat_cache[key]
+    
+    def normalize_base_stat(self, base_stat):
+        """
+        Normalizes base stats to [0,1] range where:
+        - 0 = minimum possible base stat (5)
+        - 1 = normalization point (100)
+        - >100 base stats continue scaling linearly but are capped at 2.55
+        
+        Args:
+            base_stat: The base stat value (typically 5-255)
+            
+        Returns:
+            Normalized value where 100 → 1.0
+        """
+        base_stat_min = 5    # Minimum reasonable base stat (Shedinja HP)
+        base_stat_max = 255  # Maximum base stat (Blissey HP)
+        normalization_point = 100  # Base stat value that maps to 1.0
+        scale_factor = 0.01
+        # Clamp to reasonable bounds
+        clamped = max(base_stat_min, min(base_stat, base_stat_max))
+        
+        # Linear scaling up to normalization point
+        if clamped <= normalization_point:
+            return clamped * scale_factor
+        
+        # For stats above 100, continue linear scaling but don't treat as "better"
+        return min(1.0 + (clamped - normalization_point) * scale_factor, 2.55)
+    
+    def normalize_stat(self, base_stat, current_value, level=100):
+        level = level or self.level
+        if isinstance(base_stat, str) and base_stat.lower() == 'hp':
+            return self.normalize_hp(base_stat, current_value, level)
+        return self._normalize_general_stat(base_stat, current_value, level)
+    
+    def _normalize_general_stat(self, base_stat, current_value, level):
+        """Handles non-HP stats"""
+        min_val = self.get_min_stat(base_stat, level)
+        max_val = self.get_max_stat(base_stat, level)
+        clamped = max(min(current_value, max_val), min_val)
+        return (clamped - min_val) / (max_val - min_val)
+
+    def normalize_hp(self, base_hp, current_hp, level=100):
+        """Special handling for HP stat"""
+        min_hp = math.floor(((2 * base_hp * level) / 100) + level + 10)
+        max_hp = math.floor((((2 * base_hp + 31 + 63) * level) / 100) + level + 10)
+        clamped = max(min(current_hp, max_hp), min_hp)
+        return (clamped - min_hp) / (max_hp - min_hp)
+
 class ShowdownPokemon:
     def __init__(self, pokemon_data=None):
         self.ident = VALUE_UNKNOWN
@@ -209,6 +303,7 @@ class ShowdownBattle(object):
         self.last_valid_actions = list[bool] | None
         self.last_request = None
         self.waiting_for_details = False
+        self.stat_normalizer = StatNormalizer()
 
     def update_player_side(self, side_data):
         for pokemon_data in side_data['pokemon']:
@@ -241,13 +336,94 @@ class ShowdownBattle(object):
                 self._opposingSide.append(new_pokemon)
                 if new_pokemon.is_active:
                     self._activeOpponentPokemon = new_pokemon
+    
+    def _get_ability_index(self, ability_name):
+        if ability_name == VALUE_UNKNOWN:
+            return 0
+            
+        ability_map = {
+            # Top 50 most common abilities (VGC 2023 + Smogon OU)
+            'intimidate': 1, 'speedboost': 2, 'protosynthesis': 3, 'quarkdrive': 4,
+            'unburden': 5, 'levitate': 6, 'prankster': 7, 'moldbreaker': 8,
+            'technician': 9, 'serenegrace': 10, 'grimneigh': 11, 'goodasgold': 12,
+            'wellbakedbody': 13, 'windrider': 14, 'electromorphosis': 15,
+            'thermalexchange': 16, 'supremeoverlord': 17, 'orichalcumpulse': 18,
+            'hadronengine': 19, 'opportunist': 20, 'regenerator': 21, 'toughclaws': 22,
+            'hugepower': 23, 'purepower': 24, 'disguise': 25, 'wonderguard': 26,
+            'multiscale': 27, 'magicguard': 28, 'noguard': 29, 'shadowtag': 30,
+            'arenatrap': 31, 'moxie': 32, 'sheerforce': 33, 'adaptability': 34,
+            'download': 35, 'tintedlens': 36, 'magicbounce': 37, 'voltabsorb': 38,
+            'waterabsorb': 39, 'flashfire': 40, 'sapsipper': 41, 'lightningrod': 42,
+            'stormdrain': 43, 'telepathy': 44, 'parentalbond': 45, 'ironfist': 46,
+            'sandstream': 47, 'drizzle': 48, 'drought': 49, 'snowwarning': 50,
+            
+            # Additional notable abilities (51-100)
+            'chlorophyll': 51, 'swiftswim': 52, 'slushrush': 53, 'sandrush': 54,
+            'surgesurfer': 55, 'stamina': 56, 'berserk': 57, 'competitive': 58,
+            'defiant': 59, 'justified': 60, 'weakarmor': 61, 'icescales': 62,
+            'filter': 63, 'solidrock': 64, 'furcoat': 65, 'thickfat': 66,
+            'fluffy': 67, 'rockypayload': 68, 'sharpness': 69, 'toxicdebris': 70,
+            'seedsower': 71, 'clearbody': 72, 'cudchew': 73, 'rockypayload': 74,
+            'armortail': 75, 'purifyingsalt': 76, 'eartheater': 77, 'windpower': 78,
+            'lingeringaroma': 79, 'myceliummight': 80, 'mimicry': 81, 'neuroforce': 82,
+            'beadsofruin': 83, 'swordofruin': 84, 'tabletsofruin': 85, 'vesselofruin': 86,
+            'truant': 87, 'slowstart': 88, 'defeatist': 89, 'normalize': 90,
+            'klutz': 91, 'unaware': 92, 'simple': 93, 'illuminate': 94,
+            'runaway': 95, 'stall': 96, 'wimpout': 97, 'emergencyexit': 98,
+            'imposter': 99, 'powerconstruct': 100
+        }
+        return ability_map.get(ability_name.lower().replace(" ", ""), len(ability_map)+1) # Unknown abilities go to end
+
+    def _get_item_index(self, item_name):
+        if item_name == VALUE_UNKNOWN:
+            return 0
+            
+        item_map = {
+            # Top 50 most common items
+            'leftovers': 1, 'heavydutyboots': 2, 'choicescarf': 3, 'choiceband': 4,
+            'choicespecs': 5, 'lifeorb': 6, 'focus sash': 7, 'assaultvest': 8,
+            'weaknesspolicy': 9, 'airballoon': 10, 'rockyhelmet': 11, 'safetygoggles': 12,
+            'blacksludge': 13, 'flameorb': 14, 'toxicorb': 15, 'lightclay': 16,
+            'mentalherb': 17, 'whiteherb': 18, 'redcard': 19, 'ejectbutton': 20,
+            'ejectpack': 21, 'roomservice': 22, 'blunderpolicy': 23, 'throatspray': 24,
+            'adrenalineorb': 25, 'terashard': 26, 'expertbelt': 27, 'muscleband': 28,
+            'wiseglasses': 29, 'zoomlens': 30, 'brightpowder': 31, 'quickclaw': 32,
+            'kingsrock': 33, 'razorclaw': 34, 'razorfang': 35, 'laggingtail': 36,
+            'ironball': 37, 'stickybarb': 38, 'shedshell': 39, 'bigroot': 40,
+            'bindingband': 41, 'protectivepads': 42, 'loadeddice': 43, 'covertcloak': 44,
+            'boosterenergy': 45, 'mirrorherb': 46, 'punchingglove': 47, 'clearamulet': 48,
+            'abilityshield': 49, 'mistyseed': 50,
+            
+            # Additional notable items (51-100)
+            'electricseed': 51, 'grassyseed': 52, 'psychicseed': 53, 'icestone': 54,
+            'berrysweet': 55, 'lovesweet': 56, 'cloversweet': 57, 'flowersweet': 58,
+            'starsweet': 59, 'ribbonsweet': 60, 'eviolite': 61, 'oranberry': 62,
+            'sitrusberry': 63, 'aguavberry': 64, 'figyberry': 65, 'iapapaberry': 66,
+            'wikiberry': 67, 'magoberry': 68, 'lumberry': 69, 'persimberry': 70,
+            'lumberry': 71, 'chopleberry': 72, 'occa berry': 73, 'passhoberry': 74,
+            'wacanberry': 75, 'rindoberry': 76, 'yacheberry': 77, 'chilanberry': 78,
+            'kebiaberry': 79, 'shucaberry': 80, 'cobaberry': 81, 'payapaberry': 82,
+            'tangaberry': 83, 'chartiberry': 84, 'kasibberry': 85, 'habanberry': 86,
+            'colburberry': 87, 'babiriberry': 88, 'chilanberry': 89, 'liechiberry': 90,
+            'ganlonberry': 91, 'petayaberry': 92, 'apicotberry': 93, 'salacberry': 94,
+            'micleberry': 95, 'custapberry': 96, 'jabocaberry': 97, 'rowapberry': 98,
+            'keeberry': 99, 'marangaberry': 100
+        }
+        
+        return item_map.get(item_name.lower().replace(" ", ""), len(item_map)+1) # Unknown items map to 101
+
+    def _normalize_stat(self, stat_name, current_value, base_stat, level):
+        """Wrapper for stat normalization"""
+        if stat_name == 'hp':
+            return self.stat_normalizer.normalize_hp(base_stat, current_value, level)
+        return self.stat_normalizer.normalize_stat(base_stat, current_value, level)
 
     def _get_condition_index(self, condition):
         condition_map = {'': 0, 'brn': 1,
                          'psn': 2, 'par': 3, 'slp': 4, 'frz': 5, 'fnt': 6}
         return condition_map.get(condition, 0)
 
-    def type_to_index(self, type_str):
+    def _get_type_index(self, type_str):
         if not type_str == VALUE_UNKNOWN:
             type_str = type_str.lower() if (type_str) else ''
         type_map = {
@@ -281,28 +457,38 @@ class ShowdownBattle(object):
         state = []
         section_lengths = {}
 
+        def norm_type(t): return self._get_type_index(t) / 20.0
+        def norm_cond(c): return VALUE_UNKNOWN if c in [None, VALUE_UNKNOWN] else self._get_condition_index(c) / 6.0
+        def norm_power(p): return 0.0 if p in [None, VALUE_UNKNOWN] else min(p, 200)/200.0
+        def norm_boost(b): return (b + 6) / 12.0
+        def norm_stat(stat_name, stat_val, base_stat, lvl): return self._normalize_stat(stat_name, stat_val, base_stat, lvl)
+        def norm_base_stat(stat, lvl) : return self.stat_normalizer.normalize_base_stat(stat)
+        def norm_ability(a): return self._get_ability_index(a) / 100
+        def norm_item(a): return self._get_item_index(a) / 100
+        def norm_accuracy(a) : return a / 100
+
         # Section 1: Active Player Pokemon Information
         active_player = self._activePlayerPokemon
         if active_player:
             section = [
                 active_player.hp_percentage,
-                active_player.stats["atk"],
-                active_player.stats["def"],
-                active_player.stats["spa"],
-                active_player.stats["spd"],
-                active_player.stats["spe"],
-                active_player.statBoosts["atk"],
-                active_player.statBoosts["def"],
-                active_player.statBoosts["spa"],
-                active_player.statBoosts["spd"],
-                active_player.statBoosts["spe"],
-                active_player.statBoosts["accuracy"],
-                active_player.statBoosts["evasion"],
-                self._connection._get_hash(active_player.ability) if active_player.ability != VALUE_UNKNOWN else VALUE_UNKNOWN,
-                self._connection._get_hash(active_player.item) if active_player.item != VALUE_UNKNOWN else VALUE_UNKNOWN,
-                self._get_condition_index(active_player.statusCondition if active_player.statusCondition else ''),
-                self.type_to_index(active_player.type),
-                self.type_to_index(active_player.type2 if active_player.type2 is not None else '')
+                norm_stat("atk", active_player.stats["atk"], active_player.base_stats["atk"], active_player.level),
+                norm_stat("def", active_player.stats["def"], active_player.base_stats["def"], active_player.level),
+                norm_stat("spa", active_player.stats["spa"], active_player.base_stats["spa"], active_player.level),
+                norm_stat("spd", active_player.stats["spd"], active_player.base_stats["spd"], active_player.level),
+                norm_stat("spe", active_player.stats["spe"], active_player.base_stats["spe"], active_player.level),
+                norm_boost(active_player.statBoosts["atk"]),
+                norm_boost(active_player.statBoosts["def"]),
+                norm_boost(active_player.statBoosts["spa"]),
+                norm_boost(active_player.statBoosts["spd"]),
+                norm_boost(active_player.statBoosts["spe"]),
+                norm_boost(active_player.statBoosts["accuracy"]),
+                norm_boost(active_player.statBoosts["evasion"]),
+                norm_ability(active_player.ability) if active_player.ability != VALUE_UNKNOWN else VALUE_UNKNOWN,
+                norm_item(active_player.item) if active_player.item != VALUE_UNKNOWN else VALUE_UNKNOWN,
+                norm_cond(active_player.statusCondition if active_player.statusCondition else ''),
+                norm_type(active_player.type),
+                norm_type(active_player.type2 if active_player.type2 is not None else '')
             ]
         else:
             section = [VALUE_UNKNOWN] * 18
@@ -315,23 +501,23 @@ class ShowdownBattle(object):
         if active_opponent:
             section = [
                 active_opponent.hp_percentage,
-                active_opponent.base_stats["atk"],
-                active_opponent.base_stats["def"],
-                active_opponent.base_stats["spa"],
-                active_opponent.base_stats["spd"],
-                active_opponent.base_stats["spe"],
-                active_opponent.statBoosts["atk"],
-                active_opponent.statBoosts["def"],
-                active_opponent.statBoosts["spa"],
-                active_opponent.statBoosts["spd"],
-                active_opponent.statBoosts["spe"],
-                active_opponent.statBoosts["accuracy"],
-                active_opponent.statBoosts["evasion"],
-                self._connection._get_hash(active_opponent.ability) if active_opponent.ability != VALUE_UNKNOWN else VALUE_UNKNOWN,
-                self._connection._get_hash(active_opponent.item) if active_opponent.item != VALUE_UNKNOWN else VALUE_UNKNOWN,
-                self._get_condition_index(active_opponent.statusCondition if active_opponent.statusCondition else ''),
-                self.type_to_index(active_opponent.type),
-                self.type_to_index(active_opponent.type2 if active_opponent.type2 is not None else '')
+                norm_base_stat(active_opponent.base_stats["atk"], active_opponent.level),
+                norm_base_stat(active_opponent.base_stats["def"], active_opponent.level),
+                norm_base_stat(active_opponent.base_stats["spa"], active_opponent.level),
+                norm_base_stat(active_opponent.base_stats["spd"], active_opponent.level),
+                norm_base_stat(active_opponent.base_stats["spe"], active_opponent.level),
+                norm_boost(active_opponent.statBoosts["atk"]),
+                norm_boost(active_opponent.statBoosts["def"]),
+                norm_boost(active_opponent.statBoosts["spa"]),
+                norm_boost(active_opponent.statBoosts["spd"]),
+                norm_boost(active_opponent.statBoosts["spe"]),
+                norm_boost(active_opponent.statBoosts["accuracy"]),
+                norm_boost(active_opponent.statBoosts["evasion"]),
+                norm_ability(active_opponent.ability) if active_opponent.ability != VALUE_UNKNOWN else VALUE_UNKNOWN,
+                norm_item(active_opponent.item) if active_opponent.item != VALUE_UNKNOWN else VALUE_UNKNOWN,
+                norm_cond(active_opponent.statusCondition if active_opponent.statusCondition else ''),
+                norm_type(active_opponent.type),
+                norm_type(active_opponent.type2 if active_opponent.type2 is not None else '')
             ]
         else:
             section = [VALUE_UNKNOWN] * 18
@@ -346,10 +532,10 @@ class ShowdownBattle(object):
                 move_info = [
                     1.0 if not move.get('disabled', False) else 0.0,
                     move.get('pp', 1) / move.get('maxpp', 1),
-                    self.type_to_index(move.get('type', '')),
-                    move.get('priority', 0),
-                    move.get('power', 0) if move.get('power', 0) != None else 0,
-                    move.get('accuracy', 0) if move.get('accuracy', 0) != None else 100
+                    norm_type(move.get('type', '')),
+                    move.get('priority', 0) / 6,
+                    norm_power(move.get('power', 0)) if move.get('power', 0) != None else 0,
+                    norm_accuracy(move.get('accuracy', 0)) if move.get('accuracy', 0) != None else 100
                 ]
                 moves_section += move_info
             # Ensure 4 moves with 6 attributes each
@@ -366,12 +552,12 @@ class ShowdownBattle(object):
         for pokemon in self._playerSide[:6]:
             pokemon_info = [
                 pokemon.hp_percentage,
-                self.type_to_index(pokemon.type),
-                self.type_to_index(pokemon.type2 if pokemon.type2 is not None else ''),
-                self.type_to_index(pokemon.moves[0].get('type', '')) if len(pokemon.moves) > 0 else VALUE_UNKNOWN,
-                self.type_to_index(pokemon.moves[1].get('type', '')) if len(pokemon.moves) > 1 else VALUE_UNKNOWN,
-                self.type_to_index(pokemon.moves[2].get('type', '')) if len(pokemon.moves) > 2 else VALUE_UNKNOWN,
-                self.type_to_index(pokemon.moves[3].get('type', '')) if len(pokemon.moves) > 3 else VALUE_UNKNOWN,
+                norm_type(pokemon.type),
+                norm_type(pokemon.type2 if pokemon.type2 is not None else ''),
+                norm_type(pokemon.moves[0].get('type', '')) if len(pokemon.moves) > 0 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[1].get('type', '')) if len(pokemon.moves) > 1 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[2].get('type', '')) if len(pokemon.moves) > 2 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[3].get('type', '')) if len(pokemon.moves) > 3 else VALUE_UNKNOWN,
             ]
             team_section += pokemon_info
         # Pad with unknown if less than 6
@@ -386,12 +572,12 @@ class ShowdownBattle(object):
         for pokemon in self._opposingSide[:6]:
             pokemon_info = [
                 pokemon.hp_percentage,
-                self.type_to_index(pokemon.type),
-                self.type_to_index(pokemon.type2 if pokemon.type2 is not None else ''),
-                self.type_to_index(pokemon.moves[0].get('type', '')) if len(pokemon.moves) > 0 else VALUE_UNKNOWN,
-                self.type_to_index(pokemon.moves[1].get('type', '')) if len(pokemon.moves) > 1 else VALUE_UNKNOWN,
-                self.type_to_index(pokemon.moves[2].get('type', '')) if len(pokemon.moves) > 2 else VALUE_UNKNOWN,
-                self.type_to_index(pokemon.moves[3].get('type', '')) if len(pokemon.moves) > 3 else VALUE_UNKNOWN,
+                norm_type(pokemon.type),
+                norm_type(pokemon.type2 if pokemon.type2 is not None else ''),
+                norm_type(pokemon.moves[0].get('type', '')) if len(pokemon.moves) > 0 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[1].get('type', '')) if len(pokemon.moves) > 1 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[2].get('type', '')) if len(pokemon.moves) > 2 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[3].get('type', '')) if len(pokemon.moves) > 3 else VALUE_UNKNOWN,
             ]
             opponent_team_section += pokemon_info
         # Pad with unknown if less than 6
@@ -650,7 +836,7 @@ class ShowdownConnection(object):
                                 x for x in pokemon.moves if x["id"] == VALUE_UNKNOWN]
                             knownmoveids = [
                                 x["id"] for x in pokemon.moves if x["id"] != VALUE_UNKNOWN]
-                            if len(unknownmoves) > 0 and not moveid in knownmoveids:
+                            if len(unknownmoves) > 0 and not moveid in knownmoveids and not moveid == "struggle":
                                 unknownmoves[0]["id"] = moveid
                                 unknownmoves[0]["move"] = parts[2]
                                 move_lookup = [
@@ -1430,6 +1616,14 @@ def packEvs(evList):
             evs[5] = i[:-4]
     logging.info("Packed EVs: %s", evs)
     return ",".join(evs)
+
+# def get_min_stat(base, level):
+#     """ Given a base stat and level, returns a stat value with 0 IVs, 0 EVs, and a negative nature. Used for stat normalization. """
+#     return math.floor(math.floor(((2 * base * level) / 100) + 5) * 0.9)
+
+# def get_max_stat(base, level):
+#     """ Given a base stat and level, returns a stat value with 31 IVs and 252 EVs, and a positive nature. Used for stat normalization. """
+#     return math.floor(math.floor((((2 * base + 31 + (252 / 4)) * level) / 100) + 5) * 1.1)
 
 
 if __name__ == "__main__":
