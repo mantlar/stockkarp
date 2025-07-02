@@ -117,7 +117,7 @@ class StatNormalizer:
             return clamped * scale_factor
         
         # For stats above 100, continue linear scaling but don't treat as "better"
-        return min(1.0 + (clamped - normalization_point) * scale_factor, 2.55)
+        return math.sqrt(min(1.0 + (clamped - normalization_point) * scale_factor, 2.55))
     
     def normalize_stat(self, base_stat, current_value, level=100):
         level = level or self.level
@@ -304,6 +304,30 @@ class ShowdownBattle(object):
         self.last_request = None
         self.waiting_for_details = False
         self.stat_normalizer = StatNormalizer()
+        # Weather and Terrain
+        self.weather = None  # 'sunny', 'rainy', 'hail', 'sand', 'fog', etc.
+        self.terrain = None  # 'grassy', 'misty', 'electric', etc.
+        
+        # Entry Hazards
+        self.player_entry_hazards = {
+            'stealth_rock': 0,  # 0-1 stacks
+            'spikes': 0,       # 0-3 stacks
+            'toxic_spikes': 0, # 0-2 stacks
+            'sticky_web': 0    # 0-1 stacks
+        }
+        self.opponent_entry_hazards = {
+            'stealth_rock': 0,  # 0-1 stacks
+            'spikes': 0,       # 0-3 stacks
+            'toxic_spikes': 0, # 0-2 stacks
+            'sticky_web': 0    # 0-1 stacks
+        }
+        
+        # Other field effects
+        self.is_grassy_terrain = False
+        self.is_misty_terrain = False
+        self.is_electric_terrain = False
+        self.is_psychic_terrain = False
+
 
     def update_player_side(self, side_data):
         for pokemon_data in side_data['pokemon']:
@@ -322,6 +346,7 @@ class ShowdownBattle(object):
     def update_active_pokemon(self, active_data):
         """ Parse the active object in the request object. """
         for i, v in enumerate(self._activePlayerPokemon.moves):
+            # TODO: the second turn of moves like outrage that lock a poke into a move are not the same as the actual move, and this causes a move to be overwritten by outrage (see training-FriJun270103262025.log)
             if active_data[0]["moves"][i]["id"] in [x["id"] for x in self._activePlayerPokemon.moves]:
                 v.update(active_data[0]["moves"][i])
 
@@ -453,10 +478,36 @@ class ShowdownBattle(object):
         return type_map.get(type_str, 0)
 
     def _get_state_vector(self, reqObject) -> list[float]:
+        """ where all the magic happens """
         # Initialize state sections
         state = []
         section_lengths = {}
 
+        # Weather normalization
+        def norm_weather(w): 
+            weather_map = {
+                '': 0,
+                'sunny': 1,
+                'rainy': 2,
+                'hail': 3,
+                'sand': 4,
+                'fog': 5
+            }
+            return weather_map.get(w, 0) / 5.0
+
+        # Terrain normalization
+        def norm_terrain(t): 
+            terrain_map = {
+                '': 0,
+                'grassy': 1,
+                'misty': 2,
+                'electric': 3
+            }
+            return terrain_map.get(t, 0) / 3.0
+
+        # Entry hazard normalization
+        def norm_entry_hazard(hazard_type, max_stack):
+            return min(hazard_type, max_stack) / max_stack
         def norm_type(t): return self._get_type_index(t) / 20.0
         def norm_cond(c): return VALUE_UNKNOWN if c in [None, VALUE_UNKNOWN] else self._get_condition_index(c) / 6.0
         def norm_power(p): return 0.0 if p in [None, VALUE_UNKNOWN] else min(p, 200)/200.0
@@ -587,6 +638,40 @@ class ShowdownBattle(object):
         section_lengths['opponent_team'] = len(opponent_team_section)
         logging.info(f"Opponent Team Section Length: {section_lengths['opponent_team']}")
 
+        # Section 6: Weather and Terrain
+        weather_section = [
+            norm_weather(self.weather),
+            self.is_grassy_terrain,
+            self.is_misty_terrain,
+            self.is_electric_terrain,
+            self.is_psychic_terrain
+        ]
+        state += weather_section
+        section_lengths['weather'] = len(weather_section)
+        logging.info(f"Weather Section Length: {section_lengths['weather']}")
+
+        # Section 7: Player Entry Hazards
+        player_hazard_section = [
+            norm_entry_hazard(self.player_entry_hazards['stealth_rock'], 1),
+            norm_entry_hazard(self.player_entry_hazards['spikes'], 3),
+            norm_entry_hazard(self.player_entry_hazards['toxic_spikes'], 2),
+            norm_entry_hazard(self.player_entry_hazards['sticky_web'], 1)
+        ]
+        state += player_hazard_section
+        section_lengths['player_hazards'] = len(player_hazard_section)
+        logging.info(f"Player Hazards Section Length: {section_lengths['player_hazards']}")
+
+        # Section 8: Opponent Entry Hazards
+        opponent_hazard_section = [
+            norm_entry_hazard(self.opponent_entry_hazards['stealth_rock'], 1),
+            norm_entry_hazard(self.opponent_entry_hazards['spikes'], 3),
+            norm_entry_hazard(self.opponent_entry_hazards['toxic_spikes'], 2),
+            norm_entry_hazard(self.opponent_entry_hazards['sticky_web'], 1)
+        ]
+        state += opponent_hazard_section
+        section_lengths['opponent_hazards'] = len(opponent_hazard_section)
+        logging.info(f"Opponent Hazards Section Length: {section_lengths['opponent_hazards']}")
+
         # Log total state length
         logging.info(f"Total State Length: {len(state)}")
         return state
@@ -624,7 +709,7 @@ class ShowdownConnection(object):
         else:
             self.useTeams = useTeams
         # 13 features, 9 actions
-        self.agent = DQNAgent(state_size=144, action_size=9)
+        self.agent = DQNAgent(state_size=157, action_size=9)
         self.batch_size = 32
         self.last_battle_id = None
         logging.info(
@@ -762,7 +847,6 @@ class ShowdownConnection(object):
                     if pokemon:
                         pokemon.details = details
                 if event == "switch":
-                    # TODO reset stat stages on switch
                     parts = linesplit
                     pokemon_name = parts[1].replace(
                         "p1a", "p1").replace("p2a", "p2")
@@ -970,17 +1054,57 @@ class ShowdownConnection(object):
                     # TODO handle move failure
                     pass
                 elif event == "-sidestart":
-                    # TODO more battle state shit
+                    side = linesplit[1]
+                    move = linesplit[2]
+                    if move == "Stealth Rock":
+                        if side == "p1":
+                            battle.player_entry_hazards['stealth_rock'] = 1
+                        else:
+                            battle.opponent_entry_hazards['stealth_rock'] = 1
+                    elif move == "Spikes":
+                        side_num = 1 if side == "p1" else 2
+                        if side_num == 1:
+                            battle.player_entry_hazards['spikes'] = min(battle.player_entry_hazards['spikes'] + 1, 3)
+                        else:
+                            battle.opponent_entry_hazards['spikes'] = min(battle.opponent_entry_hazards['spikes'] + 1, 3)
+                    elif move == "Toxic Spikes":
+                        side_num = 1 if side == "p1" else 2
+                        if side_num == 1:
+                            battle.player_entry_hazards['toxic_spikes'] = min(battle.player_entry_hazards['toxic_spikes'] + 1, 2)
+                        else:
+                            battle.opponent_entry_hazards['toxic_spikes'] = min(battle.opponent_entry_hazards['toxic_spikes'] + 1, 2)
+                    elif move == "Sticky Web":
+                        side_num = 1 if side == "p1" else 2
+                        if side_num == 1:
+                            battle.player_entry_hazards['sticky_web'] = 1
+                        else:
+                            battle.opponent_entry_hazards['sticky_web'] = 1
+                    logging.info(f"Entry hazard updated: {move} for side: {side}")
+                elif event == "-sideend":
+                    # TODO This shit as well
                     pass
                 elif event == "-weather":
-                    # TODO more battle state shit
-                    pass
+                    weather = linesplit[1]
+                    battle.weather = weather
+                    logging.info(f"Weather updated to: {weather}")
                 elif event == "-fieldstart":
-                    # TODO more battle state shit
-                    pass
+                    field = linesplit[1]
+                    if field == "Grassy Terrain":
+                        battle.is_grassy_terrain = True
+                    elif field == "Misty Terrain":
+                        battle.is_misty_terrain = True
+                    elif field == "Electric Terrain":
+                        battle.is_electric_terrain = True
+                    elif field == "Psychic Terrain":
+                        battle.is_psychic_terrain = True
+
+                    battle.terrain = field
+                    logging.info(f"Terrain updated to: {field}")
                 elif event == "-fieldend":
-                    # TODO more battle state shit
-                    pass
+                    battle.is_grassy_terrain = False
+                    battle.is_misty_terrain = False
+                    battle.is_electric_terrain = False
+                    battle.is_psychic_terrain = False
 
         return capture
 
@@ -1194,6 +1318,7 @@ class ShowdownConnection(object):
                             del self._currentBattles[base_room_name]
                         logging.info(
                             "Updated battle room name to: %s", new_room_name)
+                        self.sendCommand("/avatar 267", room_id=new_room_name)     # based colress avatar
             # Clean up any battles that no longer exist
             for battle_room_name in list(self._currentBattles.keys()):
                 if battle_room_name not in searchjson["games"]:

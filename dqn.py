@@ -67,12 +67,14 @@ class DQNAgent:
 
         if np.random.rand() <= self.epsilon:
             # Random action from valid choices
+            logging.info("Choosing random option")
             valid_indices = [i for i, valid in enumerate(
                 valid_actions_mask) if valid]
             if not valid_indices:
                 return 0  # Fallback action if no valid actions
             return random.choice(valid_indices)
         else:
+            logging.info("Using model to make decision")
             with torch.no_grad():
                 q_values = self.model(state.unsqueeze(0))
             q_values = q_values.squeeze(0).numpy()
