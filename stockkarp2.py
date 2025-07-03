@@ -641,10 +641,10 @@ class ShowdownBattle(object):
         # Section 6: Weather and Terrain
         weather_section = [
             norm_weather(self.weather),
-            self.is_grassy_terrain,
-            self.is_misty_terrain,
-            self.is_electric_terrain,
-            self.is_psychic_terrain
+            1 if self.is_grassy_terrain else 0,
+            1 if self.is_misty_terrain else 0,
+            1 if self.is_electric_terrain else 0,
+            1 if self.is_psychic_terrain else 0
         ]
         state += weather_section
         section_lengths['weather'] = len(weather_section)
