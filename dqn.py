@@ -141,5 +141,4 @@ class DQNAgent:
         self.sync_target_model()
 
 
-torch.serialization.add_safe_globals([DQN])
-torch.serialization.add_safe_globals([torch.nn.modules.linear.Linear])
+torch.serialization.add_safe_globals([DQN, torch.nn.modules.linear.Linear])
