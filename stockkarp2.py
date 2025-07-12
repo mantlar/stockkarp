@@ -52,17 +52,17 @@ class StatNormalizer:
         self.stat_cache = {}  # For actual stats
         self.base_stat_cache = {}  # For base stat estimations
         self.level = 100  # Default to L100 for competitive
-        
+
         # Pre-cache common competitive ranges
         self._precache_common_stats()
-        
+
     def _precache_common_stats(self):
         """Pre-caches min/max for common base stat ranges"""
         for base in range(30, 256, 5):  # All reasonable base stats
             self.get_min_stat(base)
             self.get_max_stat(base)
             self.get_estimated_stat_range(base)
-    
+
     def get_estimated_stat_range(self, base_stat):
         """
         Returns (estimated_min, estimated_max) for base stats when actual stats are unknown.
@@ -71,38 +71,42 @@ class StatNormalizer:
         key = (base_stat, 'estimated')
         if key not in self.base_stat_cache:
             # Competitive minimum (neutral nature, 0 EVs)
-            min_est = math.floor((((2 * base_stat + 31) * self.level) / 100) + 5)
-            
+            min_est = math.floor(
+                (((2 * base_stat + 31) * self.level) / 100) + 5)
+
             # Competitive maximum (beneficial nature, 252 EVs)
-            max_est = math.floor((((2 * base_stat + 31 + 63) * self.level) / 100) + 5) * 1.1
-            
+            max_est = math.floor(
+                (((2 * base_stat + 31 + 63) * self.level) / 100) + 5) * 1.1
+
             self.base_stat_cache[key] = (min_est, math.floor(max_est))
         return self.base_stat_cache[key]
-    
+
     def get_min_stat(self, base, level=100):
         """Minimum possible stat (0 IV/EV, negative nature)"""
         key = (base, level, 'min')
         if key not in self.stat_cache:
-            self.stat_cache[key] = math.floor(math.floor(((2 * base * level) / 100) + 5) * 0.9)
+            self.stat_cache[key] = math.floor(
+                math.floor(((2 * base * level) / 100) + 5) * 0.9)
         return self.stat_cache[key]
-    
+
     def get_max_stat(self, base, level=100):
         """Maximum possible stat (31 IV/252 EV, positive nature)"""
         key = (base, level, 'max')
         if key not in self.stat_cache:
-            self.stat_cache[key] = math.floor(math.floor((((2 * base + 31 + 63) * level) / 100) + 5) * 1.1)
+            self.stat_cache[key] = math.floor(math.floor(
+                (((2 * base + 31 + 63) * level) / 100) + 5) * 1.1)
         return self.stat_cache[key]
-    
+
     def normalize_base_stat(self, base_stat):
         """
         Normalizes base stats to [0,1] range where:
         - 0 = minimum possible base stat (5)
         - 1 = normalization point (100)
         - >100 base stats continue scaling linearly but are capped at 2.55
-        
+
         Args:
             base_stat: The base stat value (typically 5-255)
-            
+
         Returns:
             Normalized value where 100 → 1.0
         """
@@ -112,20 +116,20 @@ class StatNormalizer:
         scale_factor = 0.01
         # Clamp to reasonable bounds
         clamped = max(base_stat_min, min(base_stat, base_stat_max))
-        
+
         # Linear scaling up to normalization point
         if clamped <= normalization_point:
             return clamped * scale_factor
-        
+
         # For stats above 100, continue linear scaling but don't treat as "better"
         return math.sqrt(min(1.0 + (clamped - normalization_point) * scale_factor, 2.55))
-    
+
     def normalize_stat(self, base_stat, current_value, level=100):
         level = level or self.level
         if isinstance(base_stat, str) and base_stat.lower() == 'hp':
             return self.normalize_hp(base_stat, current_value, level)
         return self._normalize_general_stat(base_stat, current_value, level)
-    
+
     def _normalize_general_stat(self, base_stat, current_value, level):
         """Handles non-HP stats"""
         min_val = self.get_min_stat(base_stat, level)
@@ -136,9 +140,11 @@ class StatNormalizer:
     def normalize_hp(self, base_hp, current_hp, level=100):
         """Special handling for HP stat"""
         min_hp = math.floor(((2 * base_hp * level) / 100) + level + 10)
-        max_hp = math.floor((((2 * base_hp + 31 + 63) * level) / 100) + level + 10)
+        max_hp = math.floor(
+            (((2 * base_hp + 31 + 63) * level) / 100) + level + 10)
         clamped = max(min(current_hp, max_hp), min_hp)
         return (clamped - min_hp) / (max_hp - min_hp)
+
 
 class ShowdownPokemon:
     def __init__(self, pokemon_data=None):
@@ -279,10 +285,11 @@ class ShowdownPokemon:
         if 'item' in pokemon_data:
             self.item = pokemon_data['item']
 
+
 class BattleState(object):
     def __init__(self, battle):
         self.battle: ShowdownBattle = battle
-        
+
         # Player's side
         self._playerSide: list[ShowdownPokemon] = []
         # Opponent's side
@@ -290,17 +297,17 @@ class BattleState(object):
         # Active Pokémon
         self._activePlayerPokemon: ShowdownPokemon = None
         self._activeOpponentPokemon: ShowdownPokemon = None
-        
+
         # Weather and terrain
         self.weather = "none"
         self.terrain = None
-        
+
         # Field effects
         self.is_grassy_terrain = False
         self.is_misty_terrain = False
         self.is_electric_terrain = False
         self.is_psychic_terrain = False
-        
+
         # Entry hazards
         self.player_entry_hazards = {
             'stealth_rock': 0,
@@ -319,50 +326,54 @@ class BattleState(object):
     def from_existing(cls, existing_state):
         """
         Creates a new BattleState instance as a copy of an existing state.
-        
+
         Args:
             existing_state: The BattleState instance to copy from
-            
+
         Returns:
             A new BattleState instance with copied state data
         """
         new_state = cls(existing_state.battle)
-        
+
         # Copy player's side
-        new_state._playerSide = [copy.deepcopy(p) for p in existing_state._playerSide]
+        new_state._playerSide = [copy.deepcopy(
+            p) for p in existing_state._playerSide]
         # Copy opposing side
-        new_state._opposingSide = [copy.deepcopy(p) for p in existing_state._opposingSide]
-        
+        new_state._opposingSide = [copy.deepcopy(
+            p) for p in existing_state._opposingSide]
+
         # Set active Pokémon by finding matching identities
         new_state._activePlayerPokemon = next(
-            (p for p in new_state._playerSide if p.ident == existing_state._activePlayerPokemon.ident),
+            (p for p in new_state._playerSide if p.ident ==
+             existing_state._activePlayerPokemon.ident),
             None
         )
         new_state._activeOpponentPokemon = next(
-            (p for p in new_state._opposingSide if p.ident == existing_state._activeOpponentPokemon.ident),
+            (p for p in new_state._opposingSide if p.ident ==
+             existing_state._activeOpponentPokemon.ident),
             None
         )
-        
+
         # Copy weather and terrain state
         new_state.weather = existing_state.weather
         new_state.terrain = existing_state.terrain
-        
+
         # Copy field effects
         new_state.is_grassy_terrain = existing_state.is_grassy_terrain
         new_state.is_misty_terrain = existing_state.is_misty_terrain
         new_state.is_electric_terrain = existing_state.is_electric_terrain
         new_state.is_psychic_terrain = existing_state.is_psychic_terrain
-        
+
         # Copy entry hazards
         new_state.player_entry_hazards = existing_state.player_entry_hazards.copy()
         new_state.opponent_entry_hazards = existing_state.opponent_entry_hazards.copy()
-        
+
         return new_state
 
     def _get_ability_index(self, ability_name):
         if ability_name == VALUE_UNKNOWN:
             return 0
-            
+
         ability_map = {
             # Top 50 most common abilities (VGC 2023 + Smogon OU)
             'intimidate': 1, 'speedboost': 2, 'protosynthesis': 3, 'quarkdrive': 4,
@@ -378,7 +389,7 @@ class BattleState(object):
             'waterabsorb': 39, 'flashfire': 40, 'sapsipper': 41, 'lightningrod': 42,
             'stormdrain': 43, 'telepathy': 44, 'parentalbond': 45, 'ironfist': 46,
             'sandstream': 47, 'drizzle': 48, 'drought': 49, 'snowwarning': 50,
-            
+
             # Additional notable abilities (51-100)
             'chlorophyll': 51, 'swiftswim': 52, 'slushrush': 53, 'sandrush': 54,
             'surgesurfer': 55, 'stamina': 56, 'berserk': 57, 'competitive': 58,
@@ -394,12 +405,13 @@ class BattleState(object):
             'runaway': 95, 'stall': 96, 'wimpout': 97, 'emergencyexit': 98,
             'imposter': 99, 'powerconstruct': 100
         }
-        return ability_map.get(ability_name.lower().replace(" ", ""), len(ability_map)+1) # Unknown abilities go to end
+        # Unknown abilities go to end
+        return ability_map.get(ability_name.lower().replace(" ", ""), len(ability_map)+1)
 
     def _get_item_index(self, item_name):
         if item_name == VALUE_UNKNOWN:
             return 0
-            
+
         item_map = {
             # Top 50 most common items
             'leftovers': 1, 'heavydutyboots': 2, 'choicescarf': 3, 'choiceband': 4,
@@ -415,7 +427,7 @@ class BattleState(object):
             'bindingband': 41, 'protectivepads': 42, 'loadeddice': 43, 'covertcloak': 44,
             'boosterenergy': 45, 'mirrorherb': 46, 'punchingglove': 47, 'clearamulet': 48,
             'abilityshield': 49, 'mistyseed': 50,
-            
+
             # Additional notable items (51-100)
             'electricseed': 51, 'grassyseed': 52, 'psychicseed': 53, 'icestone': 54,
             'berrysweet': 55, 'lovesweet': 56, 'cloversweet': 57, 'flowersweet': 58,
@@ -431,10 +443,9 @@ class BattleState(object):
             'micleberry': 95, 'custapberry': 96, 'jabocaberry': 97, 'rowapberry': 98,
             'keeberry': 99, 'marangaberry': 100
         }
-        
-        return item_map.get(item_name.lower().replace(" ", ""), len(item_map)+1) # Unknown items map to 101
 
-
+        # Unknown items map to 101
+        return item_map.get(item_name.lower().replace(" ", ""), len(item_map)+1)
 
     def _get_condition_index(self, condition):
         condition_map = {'': 0, 'brn': 1,
@@ -477,7 +488,7 @@ class BattleState(object):
         section_lengths = {}
 
         # Weather normalization
-        def norm_weather(w): 
+        def norm_weather(w):
             weather_map = {
                 'none': 0,
                 'sunny': 1,
@@ -489,7 +500,7 @@ class BattleState(object):
             return weather_map.get(w, 0) / 5.0
 
         # Terrain normalization
-        def norm_terrain(t): 
+        def norm_terrain(t):
             terrain_map = {
                 '': 0,
                 'grassy': 1,
@@ -501,26 +512,41 @@ class BattleState(object):
         # Entry hazard normalization
         def norm_entry_hazard(hazard_type, max_stack):
             return min(hazard_type, max_stack) / max_stack
+
         def norm_type(t): return self._get_type_index(t) / 20.0
-        def norm_cond(c): return VALUE_UNKNOWN if c in [None, VALUE_UNKNOWN] else self._get_condition_index(c) / 6.0
-        def norm_power(p): return 0.0 if p in [None, VALUE_UNKNOWN] else min(p, 200)/200.0
+
+        def norm_cond(c): return VALUE_UNKNOWN if c in [
+            None, VALUE_UNKNOWN] else self._get_condition_index(c) / 6.0
+        def norm_power(p): return 0.0 if p in [
+            None, VALUE_UNKNOWN] else min(p, 200)/200.0
+
         def norm_boost(b): return (b + 6) / 12.0
-        def norm_stat(stat_name, stat_val, base_stat, lvl): return self.battle._normalize_stat(stat_name, stat_val, base_stat, lvl)
-        def norm_base_stat(stat, lvl) : return self.battle.stat_normalizer.normalize_base_stat(stat)
+
+        def norm_stat(stat_name, stat_val, base_stat, lvl): return self.battle._normalize_stat(
+            stat_name, stat_val, base_stat, lvl)
+
+        def norm_base_stat(
+            stat, lvl): return self.battle.stat_normalizer.normalize_base_stat(stat)
+
         def norm_ability(a): return self._get_ability_index(a) / 100
         def norm_item(a): return self._get_item_index(a) / 100
-        def norm_accuracy(a) : return a / 100
+        def norm_accuracy(a): return a / 100
 
         # Section 1: Active Player Pokemon Information
         active_player = self._activePlayerPokemon
         if active_player:
             section = [
                 active_player.hp_percentage,
-                norm_stat("atk", active_player.stats["atk"], active_player.base_stats["atk"], active_player.level),
-                norm_stat("def", active_player.stats["def"], active_player.base_stats["def"], active_player.level),
-                norm_stat("spa", active_player.stats["spa"], active_player.base_stats["spa"], active_player.level),
-                norm_stat("spd", active_player.stats["spd"], active_player.base_stats["spd"], active_player.level),
-                norm_stat("spe", active_player.stats["spe"], active_player.base_stats["spe"], active_player.level),
+                norm_stat(
+                    "atk", active_player.stats["atk"], active_player.base_stats["atk"], active_player.level),
+                norm_stat(
+                    "def", active_player.stats["def"], active_player.base_stats["def"], active_player.level),
+                norm_stat(
+                    "spa", active_player.stats["spa"], active_player.base_stats["spa"], active_player.level),
+                norm_stat(
+                    "spd", active_player.stats["spd"], active_player.base_stats["spd"], active_player.level),
+                norm_stat(
+                    "spe", active_player.stats["spe"], active_player.base_stats["spe"], active_player.level),
                 norm_boost(active_player.statBoosts["atk"]),
                 norm_boost(active_player.statBoosts["def"]),
                 norm_boost(active_player.statBoosts["spa"]),
@@ -528,11 +554,15 @@ class BattleState(object):
                 norm_boost(active_player.statBoosts["spe"]),
                 norm_boost(active_player.statBoosts["accuracy"]),
                 norm_boost(active_player.statBoosts["evasion"]),
-                norm_ability(active_player.ability) if active_player.ability != VALUE_UNKNOWN else VALUE_UNKNOWN,
-                norm_item(active_player.item) if active_player.item != VALUE_UNKNOWN else VALUE_UNKNOWN,
-                norm_cond(active_player.statusCondition if active_player.statusCondition else ''),
+                norm_ability(
+                    active_player.ability) if active_player.ability != VALUE_UNKNOWN else VALUE_UNKNOWN,
+                norm_item(
+                    active_player.item) if active_player.item != VALUE_UNKNOWN else VALUE_UNKNOWN,
+                norm_cond(
+                    active_player.statusCondition if active_player.statusCondition else ''),
                 norm_type(active_player.type),
-                norm_type(active_player.type2 if active_player.type2 is not None else '')
+                norm_type(
+                    active_player.type2 if active_player.type2 is not None else '')
             ]
         else:
             section = [VALUE_UNKNOWN] * 18
@@ -545,11 +575,16 @@ class BattleState(object):
         if active_opponent:
             section = [
                 active_opponent.hp_percentage,
-                norm_base_stat(active_opponent.base_stats["atk"], active_opponent.level),
-                norm_base_stat(active_opponent.base_stats["def"], active_opponent.level),
-                norm_base_stat(active_opponent.base_stats["spa"], active_opponent.level),
-                norm_base_stat(active_opponent.base_stats["spd"], active_opponent.level),
-                norm_base_stat(active_opponent.base_stats["spe"], active_opponent.level),
+                norm_base_stat(
+                    active_opponent.base_stats["atk"], active_opponent.level),
+                norm_base_stat(
+                    active_opponent.base_stats["def"], active_opponent.level),
+                norm_base_stat(
+                    active_opponent.base_stats["spa"], active_opponent.level),
+                norm_base_stat(
+                    active_opponent.base_stats["spd"], active_opponent.level),
+                norm_base_stat(
+                    active_opponent.base_stats["spe"], active_opponent.level),
                 norm_boost(active_opponent.statBoosts["atk"]),
                 norm_boost(active_opponent.statBoosts["def"]),
                 norm_boost(active_opponent.statBoosts["spa"]),
@@ -557,11 +592,15 @@ class BattleState(object):
                 norm_boost(active_opponent.statBoosts["spe"]),
                 norm_boost(active_opponent.statBoosts["accuracy"]),
                 norm_boost(active_opponent.statBoosts["evasion"]),
-                norm_ability(active_opponent.ability) if active_opponent.ability != VALUE_UNKNOWN else VALUE_UNKNOWN,
-                norm_item(active_opponent.item) if active_opponent.item != VALUE_UNKNOWN else VALUE_UNKNOWN,
-                norm_cond(active_opponent.statusCondition if active_opponent.statusCondition else ''),
+                norm_ability(
+                    active_opponent.ability) if active_opponent.ability != VALUE_UNKNOWN else VALUE_UNKNOWN,
+                norm_item(
+                    active_opponent.item) if active_opponent.item != VALUE_UNKNOWN else VALUE_UNKNOWN,
+                norm_cond(
+                    active_opponent.statusCondition if active_opponent.statusCondition else ''),
                 norm_type(active_opponent.type),
-                norm_type(active_opponent.type2 if active_opponent.type2 is not None else '')
+                norm_type(
+                    active_opponent.type2 if active_opponent.type2 is not None else '')
             ]
         else:
             section = [VALUE_UNKNOWN] * 18
@@ -578,8 +617,10 @@ class BattleState(object):
                     move.get('pp', 1) / move.get('maxpp', 1),
                     norm_type(move.get('type', '')),
                     move.get('priority', 0) / 6,
-                    norm_power(move.get('power', 0)) if move.get('power', 0) != None else 0,
-                    norm_accuracy(move.get('accuracy', 0)) if move.get('accuracy', 0) != None else 100
+                    norm_power(move.get('power', 0)) if move.get(
+                        'power', 0) != None else 0,
+                    norm_accuracy(move.get('accuracy', 0)) if move.get(
+                        'accuracy', 0) != None else 100
                 ]
                 moves_section += move_info
             # Ensure 4 moves with 6 attributes each
@@ -598,10 +639,14 @@ class BattleState(object):
                 pokemon.hp_percentage,
                 norm_type(pokemon.type),
                 norm_type(pokemon.type2 if pokemon.type2 is not None else ''),
-                norm_type(pokemon.moves[0].get('type', '')) if len(pokemon.moves) > 0 else VALUE_UNKNOWN,
-                norm_type(pokemon.moves[1].get('type', '')) if len(pokemon.moves) > 1 else VALUE_UNKNOWN,
-                norm_type(pokemon.moves[2].get('type', '')) if len(pokemon.moves) > 2 else VALUE_UNKNOWN,
-                norm_type(pokemon.moves[3].get('type', '')) if len(pokemon.moves) > 3 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[0].get('type', '')) if len(
+                    pokemon.moves) > 0 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[1].get('type', '')) if len(
+                    pokemon.moves) > 1 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[2].get('type', '')) if len(
+                    pokemon.moves) > 2 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[3].get('type', '')) if len(
+                    pokemon.moves) > 3 else VALUE_UNKNOWN,
             ]
             team_section += pokemon_info
         # Pad with unknown if less than 6
@@ -609,7 +654,8 @@ class BattleState(object):
             team_section += [VALUE_UNKNOWN] * (42 - len(team_section))
         state += team_section
         section_lengths['player_team'] = len(team_section)
-        logging.info(f"Player Team Section Length: {section_lengths['player_team']}")
+        logging.info(
+            f"Player Team Section Length: {section_lengths['player_team']}")
 
         # Section 5: Opponent's Team Overview
         opponent_team_section = []
@@ -618,18 +664,24 @@ class BattleState(object):
                 pokemon.hp_percentage,
                 norm_type(pokemon.type),
                 norm_type(pokemon.type2 if pokemon.type2 is not None else ''),
-                norm_type(pokemon.moves[0].get('type', '')) if len(pokemon.moves) > 0 else VALUE_UNKNOWN,
-                norm_type(pokemon.moves[1].get('type', '')) if len(pokemon.moves) > 1 else VALUE_UNKNOWN,
-                norm_type(pokemon.moves[2].get('type', '')) if len(pokemon.moves) > 2 else VALUE_UNKNOWN,
-                norm_type(pokemon.moves[3].get('type', '')) if len(pokemon.moves) > 3 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[0].get('type', '')) if len(
+                    pokemon.moves) > 0 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[1].get('type', '')) if len(
+                    pokemon.moves) > 1 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[2].get('type', '')) if len(
+                    pokemon.moves) > 2 else VALUE_UNKNOWN,
+                norm_type(pokemon.moves[3].get('type', '')) if len(
+                    pokemon.moves) > 3 else VALUE_UNKNOWN,
             ]
             opponent_team_section += pokemon_info
         # Pad with unknown if less than 6
         while len(opponent_team_section) < 42:  # 7 attributes per Pokémon
-            opponent_team_section += [VALUE_UNKNOWN] * (42 - len(opponent_team_section))
+            opponent_team_section += [VALUE_UNKNOWN] * \
+                (42 - len(opponent_team_section))
         state += opponent_team_section
         section_lengths['opponent_team'] = len(opponent_team_section)
-        logging.info(f"Opponent Team Section Length: {section_lengths['opponent_team']}")
+        logging.info(
+            f"Opponent Team Section Length: {section_lengths['opponent_team']}")
 
         # Section 6: Weather and Terrain
         weather_section = [
@@ -652,7 +704,8 @@ class BattleState(object):
         ]
         state += player_hazard_section
         section_lengths['player_hazards'] = len(player_hazard_section)
-        logging.info(f"Player Hazards Section Length: {section_lengths['player_hazards']}")
+        logging.info(
+            f"Player Hazards Section Length: {section_lengths['player_hazards']}")
 
         # Section 8: Opponent Entry Hazards
         opponent_hazard_section = [
@@ -663,11 +716,13 @@ class BattleState(object):
         ]
         state += opponent_hazard_section
         section_lengths['opponent_hazards'] = len(opponent_hazard_section)
-        logging.info(f"Opponent Hazards Section Length: {section_lengths['opponent_hazards']}")
+        logging.info(
+            f"Opponent Hazards Section Length: {section_lengths['opponent_hazards']}")
 
         # Log total state length
         logging.info(f"Total State Length: {len(state)}")
         return state
+
 
 class ShowdownBattle(object):
     """ Showdown battle context """
@@ -680,15 +735,14 @@ class ShowdownBattle(object):
         self._p1Name = ""
         self._p2Name = ""
         self._playerNumber = -1
-        self.current_state : BattleState | None = None
-        self.last_state  : BattleState | None = None
+        self.current_state: BattleState | None = None
+        self.last_state: BattleState | None = None
         self.last_state_vector: list[int] | None = None
         self.last_action = 0
-        self.last_valid_actions : list[bool] | None = None
+        self.last_valid_actions: list[bool] | None = None
         self.last_request = None
         self.waiting_for_details = False
         self.stat_normalizer = StatNormalizer()
-
 
     def update_player_side(self, side_data):
         for pokemon_data in side_data['pokemon']:
@@ -699,7 +753,8 @@ class ShowdownBattle(object):
             else:
                 new_pokemon = ShowdownPokemon(pokemon_data=pokemon_data)
                 self._connection.sendCommand(f"/details {new_pokemon.species}")
-                time.sleep(1)       # TODO this is profoundly fucking lame but if it's commented out it randomly breaks handling requests
+                # TODO this is profoundly fucking lame but if it's commented out it randomly breaks handling requests
+                time.sleep(1)
                 self.current_state._playerSide.append(new_pokemon)
                 if new_pokemon.is_active:
                     self.current_state._activePlayerPokemon = new_pokemon
@@ -728,7 +783,7 @@ class ShowdownBattle(object):
         if stat_name == 'hp':
             return self.stat_normalizer.normalize_hp(base_stat, current_value, level)
         return self.stat_normalizer.normalize_stat(base_stat, current_value, level)
-    
+
     def _get_state_vector(self):
         return self.current_state._get_normalized_state_vector()
 
@@ -747,7 +802,8 @@ class ShowdownConnection(object):
         self.webSocket.settimeout(CONFIG["websocket"]["timeout"])
         self.recvThread = threading.Thread(
             target=self.loopRecv, name="recvThread", args=(), daemon=True)
-        self.detailParserThread = threading.Thread(target=self.parseDetails, name="detailParserThread", args=(), daemon=True)
+        self.detailParserThread = threading.Thread(
+            target=self.parseDetails, name="detailParserThread", args=(), daemon=True)
         self.username = username
         self.password = password
         self.loggedIn = False
@@ -865,7 +921,8 @@ class ShowdownConnection(object):
             battle = self._currentBattles.get(roomid)
             if not battle.current_state:
                 if battle.last_state:
-                    battle.current_state = BattleState.from_existing(battle.last_state)
+                    battle.current_state = BattleState.from_existing(
+                        battle.last_state)
                 else:
                     battle.current_state = BattleState(battle)
             if battle:
@@ -894,7 +951,8 @@ class ShowdownConnection(object):
         if battle:
             if not battle.current_state:
                 if battle.last_state:
-                    battle.current_state = BattleState.from_existing(battle.last_state)
+                    battle.current_state = BattleState.from_existing(
+                        battle.last_state)
                 else:
                     battle.current_state = BattleState(battle)
             playerNumber = battle._playerNumber
@@ -929,13 +987,13 @@ class ShowdownConnection(object):
                     if pokemon:
                         if targetSide == battle.current_state._playerSide:
                             battle.current_state._activePlayerPokemon.statBoosts = {"atk": 6, "def": 6, "spa": 6,
-                                                                      "spd": 6, "spe": 6, "accuracy": 6, "evasion": 6}
+                                                                                    "spd": 6, "spe": 6, "accuracy": 6, "evasion": 6}
                             battle.current_state._activePlayerPokemon = pokemon
                         else:
                             battle.current_state._activeOpponentPokemon = pokemon
                         pokemon.hp_percentage = float(currHp) / float(maxHp)
                         battle.current_state._activeOpponentPokemon.statBoosts = {"atk": 6, "def": 6, "spa": 6,
-                                                                    "spd": 6, "spe": 6, "accuracy": 6, "evasion": 6}
+                                                                                  "spd": 6, "spe": 6, "accuracy": 6, "evasion": 6}
                     # we don't *really* care about updating the player's active pokemon here since the request will do it anyway
                     # but we do need to have something in the active opponent side for decision making
                     elif targetSide == battle.current_state._opposingSide:
@@ -1132,22 +1190,27 @@ class ShowdownConnection(object):
                     elif move == "Spikes":
                         side_num = 1 if side == "p1" else 2
                         if side_num == 1:
-                            battle.player_entry_hazards['spikes'] = min(battle.player_entry_hazards['spikes'] + 1, 3)
+                            battle.player_entry_hazards['spikes'] = min(
+                                battle.player_entry_hazards['spikes'] + 1, 3)
                         else:
-                            battle.opponent_entry_hazards['spikes'] = min(battle.opponent_entry_hazards['spikes'] + 1, 3)
+                            battle.opponent_entry_hazards['spikes'] = min(
+                                battle.opponent_entry_hazards['spikes'] + 1, 3)
                     elif move == "Toxic Spikes":
                         side_num = 1 if side == "p1" else 2
                         if side_num == 1:
-                            battle.player_entry_hazards['toxic_spikes'] = min(battle.player_entry_hazards['toxic_spikes'] + 1, 2)
+                            battle.player_entry_hazards['toxic_spikes'] = min(
+                                battle.player_entry_hazards['toxic_spikes'] + 1, 2)
                         else:
-                            battle.opponent_entry_hazards['toxic_spikes'] = min(battle.opponent_entry_hazards['toxic_spikes'] + 1, 2)
+                            battle.opponent_entry_hazards['toxic_spikes'] = min(
+                                battle.opponent_entry_hazards['toxic_spikes'] + 1, 2)
                     elif move == "Sticky Web":
                         side_num = 1 if side == "p1" else 2
                         if side_num == 1:
                             battle.player_entry_hazards['sticky_web'] = 1
                         else:
                             battle.opponent_entry_hazards['sticky_web'] = 1
-                    logging.info(f"Entry hazard updated: {move} for side: {side}")
+                    logging.info(
+                        f"Entry hazard updated: {move} for side: {side}")
                 elif event == "-sideend":
                     # TODO This shit as well
                     pass
@@ -1386,7 +1449,8 @@ class ShowdownConnection(object):
                             del self._currentBattles[base_room_name]
                         logging.info(
                             "Updated battle room name to: %s", new_room_name)
-                        self.sendCommand("/avatar 267", room_id=new_room_name)     # based colress avatar that doesnt fucking work for some reason
+                        # based colress avatar that doesnt fucking work for some reason
+                        self.sendCommand("/avatar 267", room_id=new_room_name)
             # Clean up any battles that no longer exist
             for battle_room_name in list(self._currentBattles.keys()):
                 if battle_room_name not in searchjson["games"]:
@@ -1449,7 +1513,8 @@ class ShowdownConnection(object):
 
                             if battle.last_state_vector is not None:
                                 # Terminal state (all zeros)
-                                terminal_state = [0] * len(battle.last_state_vector)
+                                terminal_state = [0] * \
+                                    len(battle.last_state_vector)
                                 self.agent.remember(
                                     battle.last_state_vector, battle.last_action, reward, terminal_state, True)
                                 self.agent.replay(self.batch_size)
@@ -1556,7 +1621,8 @@ class ShowdownConnection(object):
 
             # Log the experience replay
             logging.info("Replayed experience with reward: %s", reward)
-            logging.info("Next state (len %d): %s", len(next_state), next_state)
+            logging.info("Next state (len %d): %s",
+                         len(next_state), next_state)
 
         # Get current state and valid actions
         state = battle._get_state_vector()
