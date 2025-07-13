@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 logging.basicConfig(
     filename=f"training-{time.ctime(time.time())}.log".replace(" ",
                                                                "").replace(":", ""),
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
@@ -723,6 +723,192 @@ class BattleState(object):
         logging.info(f"Total State Length: {len(state)}")
         return state
 
+    def calculate_hp_reward(self, last_state : 'BattleState', hp_weight):
+        """Calculate reward based on HP changes for both Pokemon"""
+        hp_reward = 0.0
+        last_poke = last_state._activePlayerPokemon
+        this_poke = self._activePlayerPokemon
+        # Player HP
+        last_hp = last_poke.hp_percentage
+        current_hp = this_poke.hp_percentage
+        hp_diff = current_hp - last_hp
+        hp_reward += hp_diff * hp_weight
+        
+        return hp_reward
+
+    def calculate_damage_reward(self, last_state : 'BattleState', damage_weight):
+        """Calculate reward based on damage dealt to opponent"""
+        damage_reward = 0.0
+        
+        # Assuming damage can be inferred from opponent's HP change
+        last_opponent = last_state._activeOpponentPokemon
+        this_opponent = self._activeOpponentPokemon
+        last_opponent_hp = last_opponent.hp_percentage
+        current_opponent_hp = this_opponent.hp_percentage
+        damage_dealt = last_opponent_hp - current_opponent_hp
+        damage_reward += damage_dealt * damage_weight
+        
+        return damage_reward
+
+    def calculate_boost_reward(self, last_state : 'BattleState', boost_weight):
+        """Calculate reward based on stat boosts/nerfs"""
+        boost_reward = 0.0
+        
+        if last_state:
+            # Player stat boosts
+            last_poke = last_state._activePlayerPokemon
+            this_poke = self._activePlayerPokemon
+            player_boost_change = {
+                'atk': this_poke.statBoosts["atk"] - last_poke.statBoosts["atk"],
+                'def': this_poke.statBoosts["def"] - last_poke.statBoosts["def"],
+                'spa': this_poke.statBoosts["spa"] - last_poke.statBoosts["spa"],
+                'spd': this_poke.statBoosts["spd"] - last_poke.statBoosts["spd"],
+                'spe': this_poke.statBoosts["spe"] - last_poke.statBoosts["spe"]
+            }
+            for boost in player_boost_change.values():
+                boost_reward += boost * boost_weight
+            
+            # Opponent stat boosts
+            last_opponent = last_state._activeOpponentPokemon
+            this_opponent = self._activeOpponentPokemon
+            opponent_boost_change = {
+                'atk': this_opponent.statBoosts["atk"] - last_opponent.statBoosts["atk"],
+                'def': this_opponent.statBoosts["def"] - last_opponent.statBoosts["def"],
+                'spa': this_opponent.statBoosts["spa"] - last_opponent.statBoosts["spa"],
+                'spd': this_opponent.statBoosts["spd"] - last_opponent.statBoosts["spd"],
+                'spe': this_opponent.statBoosts["spe"] - last_opponent.statBoosts["spe"]
+            }
+            for boost in opponent_boost_change.values():
+                boost_reward -= boost * boost_weight
+        
+        return boost_reward
+
+    def calculate_status_reward(self, last_state : 'BattleState', status_weight):
+        """Calculate reward based on status conditions"""
+        status_reward = 0.0
+        
+        # Player status
+        if last_state:
+            last_poke = last_state._activePlayerPokemon
+            this_poke = self._activePlayerPokemon
+            status_changed = (last_poke.statusCondition != this_poke.statusCondition and last_poke.ident == this_poke.ident)    # if there was a switch that's not considered curing your status
+            if status_changed:
+                if this_poke.statusCondition == "":
+                    status_reward += 0.1 * status_weight
+                else:
+                    status_reward -= 0.1 * status_weight
+        # Opponent status
+        if last_state:
+            last_opponent = last_state._activeOpponentPokemon
+            this_opponent = self._activeOpponentPokemon
+            status_changed = (last_opponent.statusCondition != this_opponent.statusCondition and last_opponent.ident == this_opponent.ident)    # if there was a switch that's not considered curing your status
+            if status_changed:
+                if this_opponent.statusCondition != "" and this_opponent.statusCondition != VALUE_UNKNOWN:
+                    status_reward += 0.1 * status_weight
+                else:
+                    status_reward -= 0.1 * status_weight
+        
+        return status_reward
+
+    def calculate_moves_reward(self, last_state : 'BattleState', moves_weight):
+        """Calculate reward based on move utility and availability"""
+        moves_reward = 0.0
+        
+        # TODO right now we don't care about PP conservation but maybe in the future this is worth it?
+        # # Reward for using moves effectively
+        # if last_state:
+        #     for move_section in range(42, 66):
+        #         if current_state[move_section] > 0:
+        #             moves_reward += 0.05 * moves_weight
+        
+        return moves_reward
+
+    def calculate_hazards_reward(self, last_state : 'BattleState', hazards_weight):
+        """Calculate reward based on entry hazards"""
+        hazards_reward = 0.0
+        
+        # Player hazards
+        if last_state:
+            last_hazards = last_state.player_entry_hazards
+            this_hazards = self.player_entry_hazards
+            player_hazard_change = {
+                'stealth_rock': this_hazards["stealth_rock"] - last_hazards["stealth_rock"],
+                'spikes': this_hazards["spikes"] - last_hazards["spikes"],
+                'toxic_spikes': this_hazards["toxic_spikes"] - last_hazards["toxic_spikes"],
+                'sticky_web': this_hazards["sticky_web"] - last_hazards["sticky_web"]
+            }
+            for hazard in player_hazard_change.values():
+                hazards_reward -= hazard * hazards_weight
+        
+        # Opponent hazards
+        if last_state:
+            last_opp_hazards = last_state.opponent_entry_hazards
+            this_opp_hazards = self.opponent_entry_hazards
+            opponent_hazard_change = {
+                'stealth_rock': this_opp_hazards["stealth_rock"] - last_opp_hazards["stealth_rock"],
+                'spikes': this_opp_hazards["spikes"] - last_opp_hazards["spikes"],
+                'toxic_spikes': this_opp_hazards["toxic_spikes"] - last_opp_hazards["toxic_spikes"],
+                'sticky_web': this_opp_hazards["sticky_web"] - last_opp_hazards["sticky_web"]
+            }
+            for hazard in opponent_hazard_change.values():
+                hazards_reward -= hazard * hazards_weight
+        
+        return hazards_reward
+
+    def normalize_reward(self, reward):
+        """Normalize reward to prevent exploding gradients"""
+        return max(min(reward, 1.0), -1.0)
+
+    def is_winner(self):
+        """NOT USED"""
+        return False
+        
+
+    def calculate_reward(self, last_state : 'BattleState', is_terminal):
+        """Calculate reward based on state differences"""
+        reward = 0.0
+        
+        # Section weights (tunable parameters)
+        hp_weight = 0.3       # Importance of HP changes
+        damage_weight = 0.3  # Importance of dealing damage
+        boost_weight = 0.2   # Importance of stat boosts
+        status_weight = 0.1  # Importance of status conditions
+        moves_weight = 0.1   # Importance of move utility
+        hazards_weight = 0.1 # Importance of entry hazards
+        
+        # Calculate section rewards
+        hp_reward = self.calculate_hp_reward(last_state, hp_weight)
+        damage_reward = self.calculate_damage_reward(last_state, damage_weight)
+        boost_reward = self.calculate_boost_reward(last_state, boost_weight)
+        status_reward = self.calculate_status_reward(last_state, status_weight)
+        moves_reward = self.calculate_moves_reward(last_state, moves_weight)
+        hazards_reward = self.calculate_hazards_reward(last_state, hazards_weight)
+        
+        # Sum section rewards
+        reward = (
+            hp_reward + 
+            damage_reward + 
+            boost_reward + 
+            status_reward + 
+            moves_reward + 
+            hazards_reward
+        )
+
+        # Log individual component rewards
+        logging.debug(f"Reward Components - HP: {hp_reward:.4f}, Damage: {damage_reward:.4f}, Boosts: {boost_reward:.4f}")
+        logging.debug(f"Status: {status_reward:.4f}, Moves: {moves_reward:.4f}, Hazards: {hazards_reward:.4f}")
+        logging.debug(f"Total Reward Before Normalization: {reward:.4f}")
+        
+        # Normalize total reward
+        reward = self.normalize_reward(reward)
+        logging.debug(f"Normalized Reward: {reward:.4f}")
+        
+        # # Handle terminal states
+        # if is_terminal:
+        #     reward = 1.0 if self.is_winner() else -1.0
+            
+        return reward
+
 
 class ShowdownBattle(object):
     """ Showdown battle context """
@@ -1311,6 +1497,12 @@ class ShowdownConnection(object):
 
     def _update_battle_pokemon(self, battle: ShowdownBattle, new_details_obj):
         """Update the battle with the new pokemon information."""
+        if not battle.current_state:
+            if battle.last_state:
+                battle.current_state = BattleState.from_existing(
+                    battle.last_state)
+            else:
+                battle.current_state = BattleState(battle)
         # Update player's pokemon
         for pokemon in battle.current_state._playerSide:
             if pokemon.species.lower() == new_details_obj['name'].lower():
@@ -1613,14 +1805,19 @@ class ShowdownConnection(object):
 
         # Store previous experience if available
         if battle.last_state_vector is not None and battle.last_valid_actions is not None:
-            reward = 0  # Small intermediate reward; TODO reward function goes here
+            reward = battle.current_state.calculate_reward(battle.last_state, False)
             next_state = battle._get_state_vector()
-            self.agent.remember(battle.last_state_vector,
-                                battle.last_action, reward, next_state, False)
+            
+            # Log state transition
+            logging.debug(f"State Transition - Last State: {battle.last_state_vector[:10]}... ")
+            logging.debug(f"Current State: {next_state[:10]}... ")
+            logging.debug(f"Action: {battle.last_action}, Reward: {reward:.4f}")
+            
+            self.agent.remember(battle.last_state_vector, battle.last_action, reward, next_state, False)
             self.agent.replay(self.batch_size)
 
-            # Log the experience replay
-            logging.info("Replayed experience with reward: %s", reward)
+            # Log memory update
+            logging.info(f"Remembered Experience - Reward: {reward:.4f}")
             logging.info("Next state (len %d): %s",
                          len(next_state), next_state)
 
@@ -1879,14 +2076,6 @@ def packEvs(evList):
             evs[5] = i[:-4]
     logging.info("Packed EVs: %s", evs)
     return ",".join(evs)
-
-# def get_min_stat(base, level):
-#     """ Given a base stat and level, returns a stat value with 0 IVs, 0 EVs, and a negative nature. Used for stat normalization. """
-#     return math.floor(math.floor(((2 * base * level) / 100) + 5) * 0.9)
-
-# def get_max_stat(base, level):
-#     """ Given a base stat and level, returns a stat value with 31 IVs and 252 EVs, and a positive nature. Used for stat normalization. """
-#     return math.floor(math.floor((((2 * base + 31 + (252 / 4)) * level) / 100) + 5) * 1.1)
 
 
 if __name__ == "__main__":

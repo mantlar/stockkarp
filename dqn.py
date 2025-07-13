@@ -10,7 +10,7 @@ import logging
 # Initialize logger
 logging.basicConfig(
     filename=f"training-{time.ctime(time.time())}.log".replace(" ", "").replace(":", ""),
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 

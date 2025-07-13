@@ -3,3 +3,7 @@ stockkarp.py
 stockkarp2 backup.py
 config.json
 *.log
+test.py
+Untitled-1.txt
+.vscode/settings.json
+__pycache__/dqn.cpython-311.pyc
