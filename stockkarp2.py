@@ -726,13 +726,26 @@ class BattleState(object):
     def calculate_hp_reward(self, last_state : 'BattleState', hp_weight):
         """Calculate reward based on HP changes for both Pokemon"""
         hp_reward = 0.0
+    
+        # Check if the active Pokemon has switched
         last_poke = last_state._activePlayerPokemon
         this_poke = self._activePlayerPokemon
-        # Player HP
-        last_hp = last_poke.hp_percentage
-        current_hp = this_poke.hp_percentage
-        hp_diff = current_hp - last_hp
-        hp_reward += hp_diff * hp_weight
+        
+        # Calculate HP changes for player's active Pokemon
+        if last_poke.ident == this_poke.ident:
+            # Same active Pokemon: calculate HP difference
+            last_hp = last_poke.hp_percentage
+            current_hp = this_poke.hp_percentage
+            hp_diff = current_hp - last_hp
+            hp_reward += hp_diff * hp_weight
+            logging.debug(f"HP Reward: Player's active Pokemon HP changed from {last_hp:.2f} to {current_hp:.2f}")
+        else:
+            # Switch occurred: calculate HP difference for the new active Pokemon from its last state
+            last_hp = next((p.hp_percentage for p in last_state._playerSide if p.ident == this_poke.ident), this_poke.hp_percentage)
+            current_hp = this_poke.hp_percentage
+            hp_diff = current_hp - last_hp
+            hp_reward += hp_diff * hp_weight
+            logging.debug(f"HP Reward: Switch to {this_poke.species}, HP changed from {last_hp:.2f} to {current_hp:.2f}")
         
         return hp_reward
 
