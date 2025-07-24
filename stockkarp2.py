@@ -736,16 +736,14 @@ class BattleState(object):
             # Same active Pokemon: calculate HP difference
             last_hp = last_poke.hp_percentage
             current_hp = this_poke.hp_percentage
-            hp_diff = current_hp - last_hp
-            hp_reward += hp_diff * hp_weight
             logging.debug(f"HP Reward: Player's active Pokemon HP changed from {last_hp:.2f} to {current_hp:.2f}")
         else:
             # Switch occurred: calculate HP difference for the new active Pokemon from its last state
             last_hp = next((p.hp_percentage for p in last_state._playerSide if p.ident == this_poke.ident), this_poke.hp_percentage)
             current_hp = this_poke.hp_percentage
-            hp_diff = current_hp - last_hp
-            hp_reward += hp_diff * hp_weight
             logging.debug(f"HP Reward: Switch to {this_poke.species}, HP changed from {last_hp:.2f} to {current_hp:.2f}")
+        hp_diff = current_hp - last_hp
+        hp_reward += hp_diff * hp_weight
         
         return hp_reward
 
@@ -756,7 +754,11 @@ class BattleState(object):
         # Assuming damage can be inferred from opponent's HP change
         last_opponent = last_state._activeOpponentPokemon
         this_opponent = self._activeOpponentPokemon
-        last_opponent_hp = last_opponent.hp_percentage
+        if last_opponent.ident == this_opponent.ident:
+            last_opponent_hp = last_opponent.hp_percentage
+        else:
+            last_opponent_hp = next((p.hp_percentage for p in last_state._playerSide if p.ident == this_opponent.ident), this_opponent.hp_percentage)
+        
         current_opponent_hp = this_opponent.hp_percentage
         damage_dealt = last_opponent_hp - current_opponent_hp
         damage_reward += damage_dealt * damage_weight
@@ -804,22 +806,30 @@ class BattleState(object):
         if last_state:
             last_poke = last_state._activePlayerPokemon
             this_poke = self._activePlayerPokemon
-            status_changed = (last_poke.statusCondition != this_poke.statusCondition and last_poke.ident == this_poke.ident)    # if there was a switch that's not considered curing your status
+            if last_poke.ident == this_poke.ident:
+                target_poke = last_poke
+            else:
+                target_poke = next((p for p in last_state._playerSide if p.ident == this_poke.ident), last_poke)
+            status_changed = (target_poke.statusCondition != this_poke.statusCondition)
             if status_changed:
                 if this_poke.statusCondition == "":
-                    status_reward += 0.1 * status_weight
+                    status_reward += 1 * status_weight
                 else:
-                    status_reward -= 0.1 * status_weight
+                    status_reward -= 1 * status_weight
         # Opponent status
         if last_state:
             last_opponent = last_state._activeOpponentPokemon
             this_opponent = self._activeOpponentPokemon
-            status_changed = (last_opponent.statusCondition != this_opponent.statusCondition and last_opponent.ident == this_opponent.ident)    # if there was a switch that's not considered curing your status
+            if last_opponent.ident == this_opponent.ident:
+                target_poke = last_opponent
+            else:
+                target_poke = next((p for p in last_state._playerSide if p.ident == this_opponent.ident), last_opponent)
+            status_changed = (target_poke.statusCondition != this_poke.statusCondition)
             if status_changed:
                 if this_opponent.statusCondition != "" and this_opponent.statusCondition != VALUE_UNKNOWN:
-                    status_reward += 0.1 * status_weight
+                    status_reward += 1 * status_weight
                 else:
-                    status_reward -= 0.1 * status_weight
+                    status_reward -= 1 * status_weight
         
         return status_reward
 
@@ -879,13 +889,14 @@ class BattleState(object):
 
     def calculate_reward(self, last_state : 'BattleState', is_terminal):
         """Calculate reward based on state differences"""
+        # TODO it may be better to simply collect events that occurred last turn and use those to assign reward rather than compare differences between the two states.
         reward = 0.0
         
         # Section weights (tunable parameters)
-        hp_weight = 0.3       # Importance of HP changes
-        damage_weight = 0.3  # Importance of dealing damage
-        boost_weight = 0.2   # Importance of stat boosts
-        status_weight = 0.1  # Importance of status conditions
+        hp_weight = 0.6       # Importance of HP changes
+        damage_weight = 0.6  # Importance of dealing damage
+        boost_weight = 0.175   # Importance of stat boosts
+        status_weight = 0.5  # Importance of status conditions
         moves_weight = 0.1   # Importance of move utility
         hazards_weight = 0.1 # Importance of entry hazards
         
@@ -1005,6 +1016,7 @@ class ShowdownConnection(object):
             target=self.parseDetails, name="detailParserThread", args=(), daemon=True)
         self.username = username
         self.password = password
+        self.avatarID = 267
         self.loggedIn = False
         self._lock = threading.Lock()
         self._exit = False
@@ -1077,6 +1089,7 @@ class ShowdownConnection(object):
         if not self.loggedIn:
             self.webSocket.connect(url)
             logging.info("Connected to server: %s", url)
+            print("StockKarp has loaded! Awaiting challenge...")
 
     def sendCommand(self, command, room_id=None):
         """ Sends the given command, starting with "/", to the given room, or global if not specified. """
@@ -1190,8 +1203,8 @@ class ShowdownConnection(object):
                             battle.current_state._activePlayerPokemon = pokemon
                         else:
                             battle.current_state._activeOpponentPokemon = pokemon
-                        pokemon.hp_percentage = float(currHp) / float(maxHp)
-                        battle.current_state._activeOpponentPokemon.statBoosts = {"atk": 6, "def": 6, "spa": 6,
+                            pokemon.hp_percentage = float(currHp) / float(maxHp)
+                            battle.current_state._activeOpponentPokemon.statBoosts = {"atk": 6, "def": 6, "spa": 6,
                                                                                   "spd": 6, "spe": 6, "accuracy": 6, "evasion": 6}
                     # we don't *really* care about updating the player's active pokemon here since the request will do it anyway
                     # but we do need to have something in the active opponent side for decision making
@@ -1331,10 +1344,9 @@ class ShowdownConnection(object):
                     pokemon = next(
                         (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
-                        current_boost = pokemon.statBoosts[stat]
-                        stat_boost = {
-                            stat: min(12, current_boost + int(boost))}
-                        pokemon.statBoosts.update(stat_boost)
+                        pokemon.statBoosts[stat] = min(12, pokemon.statBoosts[stat] + int(boost))
+                    else:
+                        logging.debug("some stupid fucking gay shit happened")
                 elif event == "-unboost":
                     # Handle stat unbboosts
                     parts = linesplit
@@ -1347,9 +1359,7 @@ class ShowdownConnection(object):
                     pokemon = next(
                         (p for p in targetSide if p.ident == pokemon_name), None)
                     if pokemon:
-                        current_boost = pokemon.statBoosts[stat]
-                        stat_boost = {stat: max(0, current_boost - int(boost))}
-                        pokemon.statBoosts.update(stat_boost)
+                        pokemon.statBoosts[stat] = max(0, pokemon.statBoosts[stat] - int(boost))
                 elif event == "-ability":
                     # |-ability|p1a: Dialga|Pressure
                     parts = linesplit
@@ -1383,31 +1393,31 @@ class ShowdownConnection(object):
                     move = linesplit[2]
                     if move == "Stealth Rock":
                         if side == "p1":
-                            battle.player_entry_hazards['stealth_rock'] = 1
+                            battle.current_state.player_entry_hazards['stealth_rock'] = 1
                         else:
-                            battle.opponent_entry_hazards['stealth_rock'] = 1
+                            battle.current_state.opponent_entry_hazards['stealth_rock'] = 1
                     elif move == "Spikes":
                         side_num = 1 if side == "p1" else 2
                         if side_num == 1:
-                            battle.player_entry_hazards['spikes'] = min(
-                                battle.player_entry_hazards['spikes'] + 1, 3)
+                            battle.current_state.player_entry_hazards['spikes'] = min(
+                                battle.current_state.player_entry_hazards['spikes'] + 1, 3)
                         else:
-                            battle.opponent_entry_hazards['spikes'] = min(
-                                battle.opponent_entry_hazards['spikes'] + 1, 3)
+                            battle.current_state.opponent_entry_hazards['spikes'] = min(
+                                battle.current_state.opponent_entry_hazards['spikes'] + 1, 3)
                     elif move == "Toxic Spikes":
                         side_num = 1 if side == "p1" else 2
                         if side_num == 1:
-                            battle.player_entry_hazards['toxic_spikes'] = min(
-                                battle.player_entry_hazards['toxic_spikes'] + 1, 2)
+                            battle.current_state.player_entry_hazards['toxic_spikes'] = min(
+                                battle.current_state.player_entry_hazards['toxic_spikes'] + 1, 2)
                         else:
-                            battle.opponent_entry_hazards['toxic_spikes'] = min(
-                                battle.opponent_entry_hazards['toxic_spikes'] + 1, 2)
+                            battle.current_state.opponent_entry_hazards['toxic_spikes'] = min(
+                                battle.current_state.opponent_entry_hazards['toxic_spikes'] + 1, 2)
                     elif move == "Sticky Web":
                         side_num = 1 if side == "p1" else 2
                         if side_num == 1:
-                            battle.player_entry_hazards['sticky_web'] = 1
+                            battle.current_state.player_entry_hazards['sticky_web'] = 1
                         else:
-                            battle.opponent_entry_hazards['sticky_web'] = 1
+                            battle.current_state.opponent_entry_hazards['sticky_web'] = 1
                     logging.info(
                         f"Entry hazard updated: {move} for side: {side}")
                 elif event == "-sideend":
@@ -1415,26 +1425,27 @@ class ShowdownConnection(object):
                     pass
                 elif event == "-weather":
                     weather = linesplit[1]
-                    battle.weather = weather
-                    logging.info(f"Weather updated to: {weather}")
+                    if weather != battle.current_state.weather:
+                        battle.current_state.weather = weather
+                        logging.info(f"Weather updated to: {weather}")
                 elif event == "-fieldstart":
                     field = linesplit[1]
                     if field == "Grassy Terrain":
-                        battle.is_grassy_terrain = True
+                        battle.current_state.is_grassy_terrain = True
                     elif field == "Misty Terrain":
-                        battle.is_misty_terrain = True
+                        battle.current_state.is_misty_terrain = True
                     elif field == "Electric Terrain":
-                        battle.is_electric_terrain = True
+                        battle.current_state.is_electric_terrain = True
                     elif field == "Psychic Terrain":
-                        battle.is_psychic_terrain = True
+                        battle.current_state.is_psychic_terrain = True
 
-                    battle.terrain = field
+                    battle.current_state.terrain = field
                     logging.info(f"Terrain updated to: {field}")
                 elif event == "-fieldend":
-                    battle.is_grassy_terrain = False
-                    battle.is_misty_terrain = False
-                    battle.is_electric_terrain = False
-                    battle.is_psychic_terrain = False
+                    battle.current_state.is_grassy_terrain = False
+                    battle.current_state.is_misty_terrain = False
+                    battle.current_state.is_electric_terrain = False
+                    battle.current_state.is_psychic_terrain = False
 
         return capture
 
@@ -1615,7 +1626,7 @@ class ShowdownConnection(object):
             logging.error("Login failed. Challenge response: %s", challRequest)
             raise LoginException(challRequest)
         self.sendCommand("/trn " + self.username +
-                         ",0," + challRequest['assertion'])
+                         f",{self.avatarID}," + challRequest['assertion'])
         self.loggedIn = True
         logging.info("Successfully logged in as %s", self.username)
         return capture
